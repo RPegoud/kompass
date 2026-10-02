@@ -1,10 +1,7 @@
-from ..harness.spec import KernelSpec
+from ..harness.registry import OpEntry
 from .vec_add import REGISTRY as _vec_add
 
-REGISTRY: dict[str, KernelSpec] = {}
+REGISTRY: dict[str, OpEntry] = {}
 
 for r in [_vec_add]:
-    dup = REGISTRY.keys() & r.keys()
-    if dup:
-        raise ValueError(f"duplicate kernel names: {dup}")
     REGISTRY.update(r)

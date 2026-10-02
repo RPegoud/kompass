@@ -1,0 +1,4 @@
+- CLI:
+    - TODO: Update REGISTRY usage and types
+    - TODO: Write and test the sweep
+- TODO: Update the runner and usage of Payload/p

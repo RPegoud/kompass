@@ -57,7 +57,7 @@ def vec_add_triton_v1(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
         B,
         C,
         n_cols,
-        BLOCK_SIZE=BLOCK_SIZE,  # type: ignore[arg-type]
+        BLOCK_SIZE=BLOCK_SIZE,
     )
 
     return C

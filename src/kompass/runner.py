@@ -1,65 +1,86 @@
 from dataclasses import asdict, dataclass
-from itertools import product
 from typing import Any
 
 import torch
+import triton
+import triton.language as tl
 from tqdm.auto import tqdm
 from triton.testing import do_bench
 
+from .harness.case import Case
 from .harness.spec import BenchResults, KernelSpec
-from .harness.utils import resolve_dtype
+from .harness.utils import describe_env, resolve_dtype
 from .kernels import REGISTRY
 
 
 @dataclass()
 class Payload:
     run_id: str
-    kernels: list[str]
-    shapes: list[tuple[int, ...]]
-    dtype: str
+    op: str
+    cases: list[Case]
     device: str
-    quantiles: list[float] | None
-    seed: int
-    gpu: str | None = None
+
+@triton.jit
+def copy_kernel(
+    in_ptr,
+    out_ptr,
+    n_elements,
+    BLOCK_SIZE: tl.constexpr,
+):
+    pid = tl.program_id(axis=0)
+    offsets = tl.arange(0, BLOCK_SIZE) + pid * BLOCK_SIZE
+    mask = offsets < n_elements
+
+    x = tl.load(in_ptr + offsets, mask)
+    tl.store(out_ptr + offsets, x, mask=mask)
 
 
-def _measure_copy_bandwidth(
+def bench_copy(
     device: torch.device,
-    n_bytes: int = 256 * 1024 * 1024,
+    n_bytes: int = 256 * 1024 * 1024 * 4,
     dtype: torch.dtype = torch.float32,
-) -> float:
+):
     a = torch.empty(n_bytes // dtype.itemsize, dtype=dtype, device=device)
     b = torch.empty_like(a)
-    ms: float = do_bench(lambda: b.copy_(a), return_mode="median")  # type: ignore
+    grid = lambda meta: (triton.cdiv(a.numel(), meta["BLOCK_SIZE"]),)
+    ms: float = do_bench(
+        lambda: copy_kernel[grid](
+            in_ptr=a,
+            out_ptr=b,
+            n_elements=a.numel(),
+            BLOCK_SIZE=256,  # type: ignore
+        ),
+        return_mode="max",
+    )
     gb = 2 * n_bytes / 1e9  # copy_ moves bytes twice: read + write, multiply by 2
     return gb / (ms * 1e-3)
 
 
-def run(payload: Payload) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    dtype = resolve_dtype(payload.dtype)
+def run_bench(payload: Payload) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    cases = payload.cases
+    dtypes = [resolve_dtype(c.dtype) for c in cases]
     device = torch.device(payload.device)
 
-    cp_bandwidth = _measure_copy_bandwidth(device=device, dtype=dtype)
+    cp_bandwidth_triton = {str(t): bench_copy(device) for t in dtypes}
 
     meta: dict[str, Any] = {
         "run_id": payload.run_id,
-        "measured_copy_bandwidth_gbps": cp_bandwidth,
+        "env": describe_env(),
+        "measured_copy_bandwidth_gbps_triton": cp_bandwidth_triton,
         "payload": asdict(payload),
     }
     times: list[dict[str, Any]] = []
 
-    kernels_x_shapes = product(payload.kernels, payload.shapes)
-    pbar = tqdm(sorted(kernels_x_shapes, key=lambda x: x[0]))
+    pbar = tqdm(cases)
 
-    for kernel, shape in pbar:
-        pbar.set_description(f"Benchmarking {kernel} with {shape=}")
-        spec: KernelSpec = REGISTRY[kernel]
+    for case in pbar:
+        pbar.set_description(f"Benchmarking {case.impl} with {case.params=}")
+        spec: KernelSpec = REGISTRY[case.op].impls[case.impl]
         bench_res: BenchResults = spec.bench(
-            shape=shape,
-            dtype=dtype,
+            params=case.params,
+            dtype=resolve_dtype(case.dtype),
             device=device,
-            seed=payload.seed,
-            run_id=payload.run_id,
+            seed=case.seed,
         )
 
         times.append(asdict(bench_res))

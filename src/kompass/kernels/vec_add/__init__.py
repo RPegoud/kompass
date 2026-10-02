@@ -1,44 +1,47 @@
-import math
 from pathlib import Path
 
 import torch
 
 from ...harness.loaders import CudaLoader, TorchLoader, TritonLoader
-from ...harness.ops import OpTest
+from ...harness.ops import Op, TestResult
 from ...harness.spec import KernelSpec
+from ...kernels import OpEntry
 
 
-class VecAdd:
+class VecAdd(Op):
+    param_names: tuple[str, ...] = ("N",)
+
     @staticmethod
     def reference(*tensors: torch.Tensor) -> torch.Tensor:
         A, B = tensors
         return torch.add(A, B)
 
     @staticmethod
-    def compare(pred: torch.Tensor, ref: torch.Tensor) -> OpTest:
-        return OpTest(
+    def compare(pred: torch.Tensor, ref: torch.Tensor) -> TestResult:
+        return TestResult(
             correct=torch.equal(pred, ref),
             max_abs_diff=torch.max(torch.abs(ref - pred)).item(),
         )
 
     @staticmethod
     def make_inputs(
-        shape: tuple[int, ...],
+        params: dict[str, int],
         dtype: torch.dtype,
         requires_grad: bool,
         seed: int,
         device: torch.device,
     ) -> tuple[torch.Tensor, ...]:
+        n: tuple[int] = (params["N"],)
         gen = torch.Generator(device).manual_seed(seed)
         A = torch.randn(
-            shape,
+            *n,
             generator=gen,
             dtype=dtype,
             device=device,
             requires_grad=requires_grad,
         )
         B = torch.randn(
-            size=shape,
+            *n,
             generator=gen,
             dtype=dtype,
             device=device,
@@ -47,15 +50,15 @@ class VecAdd:
         return A, B
 
     @staticmethod
-    def bytes_moved(shape: tuple[int, ...], dtype: torch.dtype) -> int:
-        return 3 * math.prod(shape) * dtype.itemsize
+    def bytes_moved(params: dict[str, int], dtype: torch.dtype) -> int:
+        return 3 * params["N"] * dtype.itemsize
 
     @staticmethod
-    def flops(shape: tuple[int, ...], dtype: torch.dtype) -> int:
-        return math.prod(shape)
+    def flops(params: dict[str, int], dtype: torch.dtype) -> int:
+        return params["N"]
 
 
-torch_vec_add = KernelSpec(
+vec_add_torch = KernelSpec(
     op=VecAdd(),
     loader=TorchLoader(fn=torch.add),
 )
@@ -77,8 +80,13 @@ vec_add_triton_v1 = KernelSpec(
     ),
 )
 
-REGISTRY: dict[str, KernelSpec] = {
-    "torch_vec_add": torch_vec_add,
-    "vec_add_cuda_v1": vec_add_cuda_v1,
-    "vec_add_triton_v1": vec_add_triton_v1,
+REGISTRY: dict[str, OpEntry] = {
+    "vec_add": OpEntry(
+        op=VecAdd(),
+        impls={
+            "vec_add_torch": vec_add_torch,
+            "vec_add_cuda_v1": vec_add_cuda_v1,
+            "vec_add_triton_v1": vec_add_triton_v1,
+        },
+    )
 }

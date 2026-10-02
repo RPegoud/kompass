@@ -23,7 +23,10 @@
         "llvm-vs-code-extensions.vscode-clangd",
         "Anthropic.claude-code",
         "albert.TabOut",
-        "charliermarsh.ruff"
+        "charliermarsh.ruff",
+        "Gruntfuggly.todo-tree",
+        "ms-toolsai.jupyter",
+        "ms-toolsai.jupyter-renderers"
       ],
       "settings": {
         "C_Cpp.intelliSenseEngine": "disabled",

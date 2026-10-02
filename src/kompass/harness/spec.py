@@ -5,7 +5,7 @@ import torch
 from triton.testing import do_bench
 
 from .loaders import Loader
-from .ops import Op, OpTest
+from .ops import Op, TestResult
 
 
 @dataclass(frozen=True)
@@ -13,14 +13,14 @@ class TestResults:
     correct: bool
     max_abs_diff: float
     dtype: str
-    shape: tuple[int, ...]
+    params: dict[str, int]
     seed: int
 
 
 @dataclass(frozen=True)
 class BenchResults:
     kernel_name: str
-    shape: tuple[int, ...]
+    params: dict[str, int]
     dtype: str
     seed: int
     times: dict[str, list[float]] | list[float]
@@ -46,30 +46,30 @@ class KernelSpec:
         self,
         tensors: tuple[torch.Tensor, ...],
         *,
-        shape: tuple[int, ...],
+        params: dict[str, int],
         dtype: torch.dtype,
         seed: int,
     ) -> TestResults:
         pred = self.kernel(*tensors)
         ref = self.op.reference(*tensors)
-        res: OpTest = self.op.compare(pred, ref)
+        res: TestResult = self.op.compare(pred, ref)
         return TestResults(
             correct=res.correct,
             max_abs_diff=res.max_abs_diff,
             dtype=str(dtype),
-            shape=shape,
+            params=params,
             seed=seed,
         )
 
     def _make_inputs(
         self,
-        shape: tuple[int, ...],
+        params: dict[str, int],
         dtype: torch.dtype,
         device: torch.device,
         seed: int,
     ) -> tuple[torch.Tensor, ...]:
         return self.op.make_inputs(
-            shape=shape,
+            params=params,
             dtype=dtype,
             requires_grad=self.loader.supports_backward,
             seed=seed,
@@ -78,34 +78,35 @@ class KernelSpec:
 
     def test(
         self,
-        shape: tuple[int, ...],
+        params: dict[str, int],
         dtype: torch.dtype,
         device: torch.device,
         seed: int,
     ) -> TestResults:
         tensors = self.op.make_inputs(
-            shape=shape,
+            params=params,
             dtype=dtype,
             requires_grad=self.loader.supports_backward,
             seed=seed,
             device=device,
         )
-        return self._check(tensors, shape=shape, dtype=dtype, seed=seed)
+        return self._check(tensors, params=params, dtype=dtype, seed=seed)
 
     def bench(
         self,
-        shape: tuple[int, ...],
+        params: dict[str, int],
         dtype: torch.dtype,
         device: torch.device,
         seed: int,
-        run_id: str,
         warmup: int = 25,
         rep: int = 100,
         quantiles: tuple[float, ...] = (0.2, 0.5, 0.8),
     ) -> BenchResults:
-        tensors = self._make_inputs(shape=shape, dtype=dtype, device=device, seed=seed)
+        tensors = self._make_inputs(
+            params=params, dtype=dtype, device=device, seed=seed
+        )
 
-        gate = self._check(tensors=tensors, shape=shape, dtype=dtype, seed=seed)
+        gate = self._check(tensors=tensors, params=params, dtype=dtype, seed=seed)
         if not gate.correct:
             raise ValueError(
                 f"The kernel did not pass the correctness test: {gate.correct=}, {gate.max_abs_diff=}\nAborting benchmark..."
@@ -120,11 +121,11 @@ class KernelSpec:
 
         return BenchResults(
             kernel_name=self.name,
-            shape=shape,
+            params=params,
             dtype=str(dtype),
             seed=seed,
             times=times,
-            flops=self.op.flops(shape, dtype),
-            bytes_moved=self.op.bytes_moved(shape, dtype),
+            flops=self.op.flops(params, dtype),
+            bytes_moved=self.op.bytes_moved(params, dtype),
             device=str(device),
         )
