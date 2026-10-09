@@ -19,11 +19,12 @@ class TestResults:
 
 @dataclass(frozen=True)
 class BenchResults:
-    kernel_name: str
+    impl: str
     params: dict[str, int]
     dtype: str
     seed: int
     times: dict[str, list[float]] | list[float]
+    quantiles: tuple[float, ...]
     flops: int
     bytes_moved: int
     device: str
@@ -51,7 +52,7 @@ class KernelSpec:
         seed: int,
     ) -> TestResults:
         pred = self.kernel(*tensors)
-        ref = self.op.reference(*tensors)
+        ref = self.op.reference(*tensors, params=params)
         res: TestResult = self.op.compare(pred, ref)
         return TestResults(
             correct=res.correct,
@@ -120,11 +121,12 @@ class KernelSpec:
         )  # type: ignore
 
         return BenchResults(
-            kernel_name=self.name,
+            impl=self.name,
             params=params,
             dtype=str(dtype),
             seed=seed,
             times=times,
+            quantiles=quantiles,
             flops=self.op.flops(params, dtype),
             bytes_moved=self.op.bytes_moved(params, dtype),
             device=str(device),

@@ -5,8 +5,11 @@ build/
 dist/
 wheels/
 *.egg-info
+.claude
 
 # Virtual environments
 .venv
 .env
 logs
+reports
+.DS_Store

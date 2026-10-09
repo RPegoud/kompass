@@ -19,12 +19,11 @@ class Op(ABC):
 
     @staticmethod
     @abstractmethod
-    def reference(*tensors: torch.Tensor) -> torch.Tensor:
+    def reference(*tensors: torch.Tensor, params: dict[str, int]) -> torch.Tensor:
         raise NotImplementedError
 
-    @staticmethod
     @abstractmethod
-    def compare(pred: torch.Tensor, ref: torch.Tensor) -> TestResult:
+    def compare(self, pred: torch.Tensor, ref: torch.Tensor) -> TestResult:
         raise NotImplementedError
 
     @staticmethod

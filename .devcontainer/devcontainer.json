@@ -26,7 +26,8 @@
         "charliermarsh.ruff",
         "Gruntfuggly.todo-tree",
         "ms-toolsai.jupyter",
-        "ms-toolsai.jupyter-renderers"
+        "ms-toolsai.jupyter-renderers",
+        "yzhang.markdown-all-in-one"
       ],
       "settings": {
         "C_Cpp.intelliSenseEngine": "disabled",

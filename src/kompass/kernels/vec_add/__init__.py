@@ -12,12 +12,11 @@ class VecAdd(Op):
     param_names: tuple[str, ...] = ("N",)
 
     @staticmethod
-    def reference(*tensors: torch.Tensor) -> torch.Tensor:
+    def reference(*tensors: torch.Tensor, params=None) -> torch.Tensor:
         A, B = tensors
         return torch.add(A, B)
 
-    @staticmethod
-    def compare(pred: torch.Tensor, ref: torch.Tensor) -> TestResult:
+    def compare(self, pred: torch.Tensor, ref: torch.Tensor, params=None) -> TestResult:
         return TestResult(
             correct=torch.equal(pred, ref),
             max_abs_diff=torch.max(torch.abs(ref - pred)).item(),
@@ -56,7 +55,6 @@ class VecAdd(Op):
     @staticmethod
     def flops(params: dict[str, int], dtype: torch.dtype) -> int:
         return params["N"]
-
 
 vec_add_torch = KernelSpec(
     op=VecAdd(),

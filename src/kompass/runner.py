@@ -20,6 +20,7 @@ class Payload:
     cases: list[Case]
     device: str
 
+
 @triton.jit
 def copy_kernel(
     in_ptr,
@@ -56,19 +57,21 @@ def bench_copy(
     return gb / (ms * 1e-3)
 
 
-def run_bench(payload: Payload) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def run_bench(
+    payload: Payload,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str | int | None]]:
     cases = payload.cases
     dtypes = [resolve_dtype(c.dtype) for c in cases]
     device = torch.device(payload.device)
 
-    cp_bandwidth_triton = {str(t): bench_copy(device) for t in dtypes}
+    cp_bandwidth_triton = {str(t): bench_copy(device, dtype=t) for t in dtypes}
 
+    env = describe_env()
     meta: dict[str, Any] = {
         "run_id": payload.run_id,
-        "env": describe_env(),
         "measured_copy_bandwidth_gbps_triton": cp_bandwidth_triton,
         "payload": asdict(payload),
-    }
+    } | env
     times: list[dict[str, Any]] = []
 
     pbar = tqdm(cases)
@@ -85,4 +88,4 @@ def run_bench(payload: Payload) -> tuple[dict[str, Any], list[dict[str, Any]]]:
 
         times.append(asdict(bench_res))
 
-    return meta, times
+    return meta, times, env

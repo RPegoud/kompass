@@ -1,6 +1,6 @@
+#include "../common.cuh"
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/extension.h>
-#include "../common.cuh"
 
 inline void check_vec_add_inputs(const at::Tensor &A, const at::Tensor &B) {
   TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be CUDA tensors");

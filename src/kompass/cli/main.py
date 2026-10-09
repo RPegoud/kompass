@@ -1,4 +1,5 @@
-from typing import Annotated, Any
+from pathlib import Path
+from typing import Annotated, Any, Literal
 
 import typer
 
@@ -19,55 +20,14 @@ def registry():
 
     console = Console()
     table = Table(title="Kompass Registry")
-    table.add_column("Kernels", style="magenta")
-    for op_name, impls in REGISTRY.items():
-        table.add_row(op_name, str(impls))
+    table.add_column("Ops", style="magenta")
+    table.add_column("Impls")
+    print(REGISTRY)
+    for op_name in REGISTRY:
+        for impl in REGISTRY[op_name].impls:
+            table.add_row(op_name, impl)
 
     console.print(table)
-
-
-@app.command()
-def profile(
-    kernel: Annotated[str, typer.Argument(help="Registry key")],
-    p: Annotated[
-        list[str],
-        typer.Option(
-            help="Op parameters, repeated option. Example: -p batch=64 -p seqlen=4096"
-        ),
-    ],
-    dtype: str = "float32",
-    device: str = "cuda:0",
-    seed: int = 0,
-    warmup: int = 5,
-):
-    """Run one kernel once, scoped for `ncu` capture."""
-    import torch
-
-    from ..harness.profile import profile_one
-    from ..harness.utils import resolve_dtype, resolve_impl
-
-    _, spec = resolve_impl(kernel)
-    expected_params = set(spec.op.param_names)
-
-    resolved_dtype: torch.dtype = resolve_dtype(dtype)
-    resolved_device = torch.device(device)
-    resolved_params = {param: int(val) for (param, val) in [x.split("=") for x in p]}
-
-    resolved_params_keys = set(resolved_params.keys())
-    if resolved_params_keys != expected_params:
-        raise typer.BadParameter(
-            f"Expected params: {expected_params}, got {resolved_params_keys}, missing {expected_params - resolved_params_keys}"
-        )
-
-    # TODO: handle output?
-    profile_one(
-        spec=spec,
-        params=resolved_params,
-        dtype=resolved_dtype,
-        seed=seed,
-        device=resolved_device,
-        warmup=warmup,
-    )
 
 
 @app.command()
@@ -81,7 +41,6 @@ def bench(
     """Run one Op against multiple `Cases` ({impl, shape, dtype} tuples)."""
     import json
     import uuid
-    from datetime import UTC, datetime
     from functools import partial
     from itertools import product
 
@@ -90,18 +49,20 @@ def bench(
     from ..harness.case import Case
     from ..harness.configs import SweepConfig
     from ..harness.ops import Op
-    from ..harness.utils import git_commit, repo_root
+    from ..harness.utils import get_timestamp, git_commit, repo_root
     from ..kernels import REGISTRY
     from ..runner import Payload
 
-    def run_local(payload: Payload) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def run_local(
+        payload: Payload,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str | int | None]]:
         from ..runner import run_bench
 
         return run_bench(payload)
 
     def run_modal(
         payload: Payload, gpu: str
-    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str | int | None]]:
         import modal
 
         from ..infra.modal_runner import app, run_modal_bench
@@ -110,7 +71,7 @@ def bench(
             return run_modal_bench.with_options(gpu=gpu).remote(payload)
 
     run_id = uuid.uuid4().hex[:8]
-    timestamp = datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
+    timestamp = get_timestamp()
 
     output_dir = repo_root() / "logs" / f"{timestamp}_{run_id}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -167,24 +128,176 @@ def bench(
             f"Expected backend format `modal:gpu`, e.g. `modal:h100`, got {backend}"
         )
 
-    meta, times = {}, []
+    meta, times, env = {}, [], {}
 
     try:
-        meta, times = runner(payload)
+        meta, times, env = runner(payload)
     except Exception as e:
         meta["error"] = repr(e)
         raise
     finally:
         meta |= {
+            "kind": "bench",
             "run_id": run_id,
             "timestamp": timestamp,
             "git_commit": git_commit(),
         }
+        for row in times:  # flatten params dict to "param_{name}"
+            params = row.pop("params")
+            for p_name, p_value in params.items():
+                row[f"param_{p_name}"] = p_value
 
         with open(meta_file, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
         with open(times_file, "w", encoding="utf-8") as f:
-            f.writelines(json.dumps(row | {"run_id": run_id}) + "\n" for row in times)
+            f.writelines(
+                json.dumps(row | env | {"run_id": run_id, "kind": "bench"}) + "\n"
+                for row in times
+            )
+
+
+@app.command()
+def ingest(report_file: Path) -> None:
+    """Parse a `.ncu-rep` report into a record row."""
+
+    import json
+    from dataclasses import asdict
+
+    import ncu_report
+
+    from ..harness.records import ProfileRecord
+    from ..harness.utils import repo_root
+
+    report_dir = report_file.parent
+    uid = report_file.parent.stem
+    meta_file = report_dir / "meta.json"
+    meta = json.load(meta_file.open())
+    ts = meta["timestamp"]
+
+    ctx = ncu_report.load_report(str(report_file))  # type: ignore[call-arg]
+    rows = []
+    for rng in ctx:
+        for i, action in enumerate(rng):
+            rows.append(
+                ProfileRecord(
+                    meta=meta,
+                    kernel_name=action.name(),
+                    action_idx=i,
+                    duration_ns=action["gpu__time_duration.sum"].as_uint64(),
+                    dram_bytes=action["dram__bytes.sum"].as_uint64(),
+                    dram_pct_peak=action[
+                        "dram__throughput.avg.pct_of_peak_sustained_elapsed"
+                    ].as_double(),
+                    sm_pct_peak=action[
+                        "sm__throughput.avg.pct_of_peak_sustained_elapsed"
+                    ].as_double(),
+                )
+            )
+    records = [asdict(rec) for rec in rows]
+
+    for rec in records:  # flatten meta, and its params dict to "param_{name}" : value
+        rec_meta = rec.pop("meta")
+        params = rec_meta.pop("params")
+        rec |= rec_meta
+        rec["kind"] = "profile"
+        for p_name, p_value in params.items():
+            rec[f"param_{p_name}"] = p_value
+
+    logs_dir = Path(repo_root()) / "logs"
+    records_dir = logs_dir / f"{ts}_{uid}"
+    records_dir.mkdir(parents=True, exist_ok=True)
+
+    with open(records_dir / "records.jsonl", "w", encoding="utf-8") as f:
+        f.writelines(json.dumps(rec) + "\n" for rec in records)
+
+    with open(records_dir / "meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, indent=2)
+
+
+@app.command()
+def profile(
+    registry_key: Annotated[
+        str,
+        typer.Argument(
+            help="Registry key as a `op/framework_version` partition, e.g. `vec_add/cuda_v1` instead of `vec_add_cuda_v1`"
+        ),
+    ],
+    p: Annotated[
+        list[str],
+        typer.Option(
+            "-p",
+            help="Op parameters, repeated option. Example: -p batch=64 -p seqlen=4096",
+        ),
+    ],
+    dtype: Annotated[str, typer.Option("--dtype")] = "float32",
+    device: Annotated[str, typer.Option("--device")] = "cuda:0",
+    seed: Annotated[int, typer.Option("--seed")] = 0,
+    warmup: Annotated[int, typer.Option("--warmup")] = 5,
+    set_: Annotated[
+        Literal["full", "roofline", "detailed"],
+        typer.Option("--set", help="The `ncu` set"),
+    ] = "full",
+):
+    """Profile one case under Nsight Compute."""
+    import json
+    import subprocess
+    import sys
+    import uuid
+
+    from ..harness.utils import (
+        get_timestamp,
+        git_commit,
+        parse_params,
+        repo_root,
+        resolve_impl,
+    )
+
+    op, impl = resolve_impl(registry_key)
+    params = parse_params(p, expected=impl.op.param_names)
+    ts = get_timestamp()
+
+    run_dir = (
+        repo_root() / "reports" / registry_key.replace("/", "_") / uuid.uuid4().hex[:8]
+    )
+    run_dir.mkdir(parents=True)
+    meta_file = run_dir / "meta.json"
+    meta_file.write_text(
+        json.dumps(
+            {
+                "op": op,
+                "impl": impl,
+                "params": params,
+                "dtype": dtype,
+                "device": device,
+                "seed": seed,
+                "warmup": warmup,
+                "ncu_set": set_,
+                "git_commit": git_commit(),
+                "timestamp": ts,
+            },
+            indent=2,
+        )
+    )
+
+    cmd = [
+        "ncu",
+        "--set",
+        set_,
+        "--profile-from-start",
+        "off",
+        "-f",
+        "-o",
+        str(run_dir / "report"),
+        "--",
+        sys.executable,
+        "-m",
+        "kompass.harness.profile",
+        str(meta_file),
+    ]
+    rc = subprocess.run(cmd, check=False).returncode
+    if rc == 0:
+        ingest(run_dir / "report.ncu-rep")
+    raise typer.Exit(rc)
 
 
 if __name__ == "__main__":

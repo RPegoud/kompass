@@ -6,3 +6,8 @@ build
 dist
 wheels
 *.egg-info
+.env
+logs
+reports
+**/.DS_Store
+*.ipynb

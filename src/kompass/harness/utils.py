@@ -1,5 +1,6 @@
 import re
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 import torch
@@ -9,7 +10,7 @@ from .ops import Op
 from .spec import KernelSpec
 
 
-def describe_env() -> dict:
+def describe_env() -> dict[str, str | int | None]:
     import torch
 
     def _sh(*argv) -> str:
@@ -41,6 +42,7 @@ def resolve_impl(name: str) -> tuple[Op, KernelSpec]:
     from ..kernels import REGISTRY
 
     op_name, _, impl_name = name.partition("/")
+    impl_name = f"{op_name}_{impl_name}"
     if not impl_name:
         raise typer.BadParameter(f"Expected <op>/<impl>, got {name!r}")
     try:
@@ -96,3 +98,16 @@ def git_commit() -> str | None:
         FileNotFoundError,
     ):
         return None
+
+
+def parse_params(params: list[str], expected: tuple[str, ...]) -> dict[str, int]:
+    """
+    Parses a list of params with format `param=value` from the CLI.
+    """
+    resolved = {param: int(val) for (param, val) in [p.split("=", 1) for p in params]}
+    assert all(n in expected for n in resolved)
+    return resolved
+
+
+def get_timestamp() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")

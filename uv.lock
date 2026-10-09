@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.14"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -638,6 +638,7 @@ dependencies = [
     { name = "ipykernel" },
     { name = "modal" },
     { name = "nbformat" },
+    { name = "ncu-report" },
     { name = "ninja" },
     { name = "numpy" },
     { name = "pandas" },
@@ -656,6 +657,7 @@ requires-dist = [
     { name = "ipykernel", specifier = ">=7.3.0" },
     { name = "modal", specifier = ">=1.5.4" },
     { name = "nbformat", specifier = ">=5.11.1" },
+    { name = "ncu-report", specifier = ">=2026.2.0" },
     { name = "ninja", specifier = ">=1.13.2" },
     { name = "numpy", specifier = ">=2.5.2" },
     { name = "pandas", specifier = ">=3.0.6" },
@@ -831,6 +833,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/31/72/b3446efab8756e7df4b8ec587f8e611cb5a7249e4323db480802f1d3be04/nbformat-5.11.1.tar.gz", hash = "sha256:32d4521c68c6e7d5b29c76defaeed9f42ea733142b9b19f88277ce10390b9c4d", size = 147775, upload-time = "2026-08-17T08:10:51.942Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/1a/69/ee613f74085ca7103f79cd08d579c4f3177d1d26e5d3d9528d2d6536a707/nbformat-5.11.1-py3-none-any.whl", hash = "sha256:cc6698fa75f4fab8755ead786317815f13a6fee3b53311c0abb1a8b51d52f7ec", size = 79849, upload-time = "2026-08-17T08:10:50.18Z" },
+]
+
+[[package]]
+name = "ncu-report"
+version = "2026.2.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/78/89515aa751510b459a633da6175053d61162b78af22f2efa76ace474660c/ncu_report-2026.2.0-cp37-abi3-macosx_13_0_arm64.whl", hash = "sha256:89fd03e0efaff3d58d77b511dd4c03b0936dbcb5154e3761fd453c4fbb207dd6", size = 13040098, upload-time = "2026-06-01T13:54:11.618Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/7e/d0126b7fbb42b36d3404c2330c1e09fa18e7b256a222969f2321a84acb9d/ncu_report-2026.2.0-cp37-abi3-macosx_13_0_x86_64.whl", hash = "sha256:73c737db34d7399dc3eed3fa874d68776d2d0a63584822b843540297c4d02993", size = 13599582, upload-time = "2026-06-01T13:54:14.13Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/1b/f57729dc9f848c6089b3b35eae3ec74c7e981f7fc4e26656b3a4a53a9f87/ncu_report-2026.2.0-cp37-abi3-manylinux_2_25_aarch64.whl", hash = "sha256:5b3167a324b56f8efcbf85c6fd3365ac482572a4bb37a76ef4f210f8142b26c9", size = 15320318, upload-time = "2026-06-01T13:54:16.631Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/a4/3b7a6cbba6918a272bf92ef3540d929055dd4529fe6cb157e6c8baa62140/ncu_report-2026.2.0-cp37-abi3-manylinux_2_25_x86_64.whl", hash = "sha256:579febf0e25eaed8f478d36daf0deaf557c1e377557933a051cf0d11cca02c55", size = 15786653, upload-time = "2026-06-01T13:54:19.301Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/02/f67d4a32f63229a59c4f71f75bfcbef9b3a8cc9d7c4e71f3161b4663e957/ncu_report-2026.2.0-cp37-abi3-win_amd64.whl", hash = "sha256:e8a630f33b4b9ba3c68e9acbaa0c8065d2af88409f724998624267beb00bc711", size = 12216148, upload-time = "2026-06-01T13:54:22.622Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/d8/3e7ebf747efe118448ee6cb1ccf6ca4c5a49d9a4790c0f869a18353f0b7e/ncu_report-2026.2.0-cp37-abi3-win_arm64.whl", hash = "sha256:9b411c8a6b11bbe51184fabcebe291aa5a1918a37aae4657b7b7c8ff168e75af", size = 11858215, upload-time = "2026-06-01T13:54:24.79Z" },
 ]
 
 [[package]]

@@ -11,10 +11,7 @@ CUDA_KERNEL_CACHE_PATH = "/cache/cuda"
 TRITON_KERNEL_CACHE_PATH = "/cache/triton"
 
 cuda_image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:13.3.0-devel-ubuntu26.04",
-        add_python="3.14",
-    )
+    modal.Image.from_dockerfile("Dockerfile")
     .entrypoint([])
     .env(
         {
@@ -39,7 +36,9 @@ triton_vol = modal.Volume.from_name(TRITON_VOLUME_NAME)
     image=cuda_image,
     volumes={CUDA_KERNEL_CACHE_PATH: cuda_vol, TRITON_KERNEL_CACHE_PATH: triton_vol},
 )
-def run_modal_bench(payload: Payload) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def run_modal_bench(
+    payload: Payload,
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str | int | None]]:
     from ..runner import run_bench
 
     return run_bench(payload)

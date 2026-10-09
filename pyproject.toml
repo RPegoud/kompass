@@ -12,6 +12,7 @@ dependencies = [
     "ipykernel>=7.3.0",
     "modal>=1.5.4",
     "nbformat>=5.11.1",
+    "ncu-report>=2026.2.0",
     "ninja>=1.13.2",
     "numpy>=2.5.2",
     "pandas>=3.0.6",
