@@ -2,6 +2,7 @@ import hashlib
 import importlib
 import os
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Protocol
 
@@ -18,10 +19,13 @@ class Loader(Protocol):
 
 
 class TorchLoader(Loader):
-    def __init__(self, fn: Callable):
+    def __init__(self, fn: Callable, options: dict[str, int | str] | None = None):
         self.fn_name = f"torch_{fn.__name__}"
         self.supports_backward = True
-        self.fn = fn
+        if options:
+            self.fn = partial(fn, **options)
+        else:
+            self.fn = fn
 
     def load(self) -> Callable:
         return self.fn

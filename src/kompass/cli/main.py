@@ -22,7 +22,6 @@ def registry():
     table = Table(title="Kompass Registry")
     table.add_column("Ops", style="magenta")
     table.add_column("Impls")
-    print(REGISTRY)
     for op_name in REGISTRY:
         for impl in REGISTRY[op_name].impls:
             table.add_row(op_name, impl)
@@ -41,6 +40,7 @@ def bench(
     """Run one Op against multiple `Cases` ({impl, shape, dtype} tuples)."""
     import json
     import uuid
+    from collections import Counter
     from functools import partial
     from itertools import product
 
@@ -77,6 +77,9 @@ def bench(
     output_dir.mkdir(parents=True, exist_ok=True)
     meta_file = output_dir / "meta.json"
     times_file = output_dir / "times.jsonl"
+
+    sweep_path = Path(sweep_cfg)
+    cfg_name = sweep_path.stem
 
     raw = OmegaConf.to_container(OmegaConf.load(sweep_cfg), resolve=True)
     if not isinstance(raw, dict):
@@ -137,6 +140,7 @@ def bench(
         raise
     finally:
         meta |= {
+            "cfg_name": cfg_name,
             "kind": "bench",
             "run_id": run_id,
             "timestamp": timestamp,
@@ -146,15 +150,24 @@ def bench(
             params = row.pop("params")
             for p_name, p_value in params.items():
                 row[f"param_{p_name}"] = p_value
+            row |= env
+            row |= {
+                "cfg_name": cfg_name,
+                "run_id": run_id,
+                "kind": "bench",
+                "measured_copy_bandwidth_gbps_triton": meta[
+                    "measured_copy_bandwidth_gbps_triton"
+                ],
+            }
 
         with open(meta_file, "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
         with open(times_file, "w", encoding="utf-8") as f:
-            f.writelines(
-                json.dumps(row | env | {"run_id": run_id, "kind": "bench"}) + "\n"
-                for row in times
-            )
+            f.writelines(json.dumps(row) + "\n" for row in times)
 
+    typer.echo(
+        f"Run complete!\nSummary:{json.dumps(Counter([r['status'] for r in times]), indent=2)}"
+    )
 
 @app.command()
 def ingest(report_file: Path) -> None:
@@ -219,7 +232,7 @@ def profile(
     registry_key: Annotated[
         str,
         typer.Argument(
-            help="Registry key as a `op/framework_version` partition, e.g. `vec_add/cuda_v1` instead of `vec_add_cuda_v1`"
+            help="Registry key as a `op/framework_version` partition, e.g. `vec_add/cuda` instead of `vec_add_cuda`"
         ),
     ],
     p: Annotated[
@@ -232,7 +245,7 @@ def profile(
     dtype: Annotated[str, typer.Option("--dtype")] = "float32",
     device: Annotated[str, typer.Option("--device")] = "cuda:0",
     seed: Annotated[int, typer.Option("--seed")] = 0,
-    warmup: Annotated[int, typer.Option("--warmup")] = 5,
+    warmup: Annotated[int, typer.Option("--warmup")] = 25,
     set_: Annotated[
         Literal["full", "roofline", "detailed"],
         typer.Option("--set", help="The `ncu` set"),

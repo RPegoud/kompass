@@ -1,5 +1,5 @@
 {
-  "name": "Kompass dev",
+  "name": "kompass dev",
   "build": {
     "dockerfile": "../Dockerfile"
   },

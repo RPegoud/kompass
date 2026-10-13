@@ -1,35 +1,37 @@
+from functools import partial
+
 import torch
 import torch.nn.functional as F
 
+from ...harness.loaders import TorchLoader, TritonLoader
 from ...harness.ops import Op, TestResult
+from ...harness.spec import KernelSpec
+from ...kernels import OpEntry
 
 
 class Softmax(Op):
-    param_names: tuple[str, ...] = ("N", "dim")
-
-    def __init__(self) -> None:
-        self.tolerance_per_dtype = {
-            "bf16": {"atol": 1e-6, "rtol": 1e-3},
-            "float32": {"atol": 1e-6, "rtol": 1e-3},
-        }
+    param_names: tuple[str, ...] = ("M", "N")
 
     @staticmethod
-    def reference(*tensors: torch.Tensor, params: dict[str, int]) -> torch.Tensor:
+    def reference(
+        *tensors: torch.Tensor,
+        params: dict[str, int],
+    ) -> torch.Tensor:
         x = tensors[0]
-        return F.softmax(x, dim=params["dim"])
+        dtype = x.dtype
+        ref = F.softmax(x, dim=-1, dtype=torch.float32)  # compute ref in full precision
+        return ref.to(dtype)
 
-    def compare(self, pred: torch.Tensor, ref: torch.Tensor) -> TestResult:
-        correct = False
-        dtype = pred.dtype
-
-        torch.testing.assert_close(
-            pred,
-            ref,
-            rtol=self.tolerance_per_dtype[str(dtype)]["rtol"],
-            atol=self.tolerance_per_dtype[str(dtype)]["atol"],
-        )
-
+    def compare(
+        self,
+        pred: torch.Tensor,
+        ref: torch.Tensor,
+    ) -> TestResult:
         correct = True
+        try:
+            torch.testing.assert_close(pred, ref)
+        except AssertionError:
+            correct = False
 
         return TestResult(
             correct=correct,
@@ -44,10 +46,9 @@ class Softmax(Op):
         seed: int,
         device: torch.device,
     ) -> tuple[torch.Tensor, ...]:
-        n: tuple[int] = (params["N"],)
         gen = torch.Generator(device).manual_seed(seed)
         X = torch.randn(
-            *n,
+            size=(params["M"], params["N"]),
             generator=gen,
             dtype=dtype,
             device=device,
@@ -57,12 +58,44 @@ class Softmax(Op):
 
     @staticmethod
     def bytes_moved(params: dict[str, int], dtype: torch.dtype) -> int:
-        return params["N"] * dtype.itemsize * 2
+        """Softmax must move at least 2MN bytes."""
+        return params["M"] * params["N"] * dtype.itemsize * 2
 
     @staticmethod
-    def flops(params: dict[str, int], dtype: torch.dtype) -> int:
+    def flops(params: dict[str, int]) -> int:
         """
-        Theoretically, the softmax requires `3N` FLOPs, however numerically stable
-        variatns require `5N` to find the max and subtract it from the input.
+        The theoretical amount of FLOPs is 3N for softmax, although in practice
+        computing the max for numerical stability raises FLOPs to 5N.
+        We report the algorithmic ideal.
         """
-        return params["N"] * 5
+        return params["M"] * params["N"] * 3
+
+
+SoftmaxSpec = partial(KernelSpec, op=Softmax())
+
+softmax_triton_single_block = SoftmaxSpec(
+    loader=TritonLoader(
+        module_path=f"{__package__}.softmax",
+        fn_name="softmax_triton_single_block",
+        supports_backward=False,
+    ),
+)
+softmax_triton_online = SoftmaxSpec(
+    loader=TritonLoader(
+        module_path=f"{__package__}.softmax",
+        fn_name="softmax_triton_online",
+        supports_backward=False,
+    ),
+)
+softmax_torch = SoftmaxSpec(loader=TorchLoader(torch.softmax, options={"dim": -1}))
+
+REGISTRY: dict[str, OpEntry] = {
+    "softmax": OpEntry(
+        op=Softmax(),
+        impls={
+            "softmax_triton_single_block": softmax_triton_single_block,
+            "softmax_triton_online": softmax_triton_online,
+            "softmax_torch": softmax_torch,
+        },
+    )
+}

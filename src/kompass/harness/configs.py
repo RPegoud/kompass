@@ -8,4 +8,4 @@ class SweepConfig:
     seed: int
     impls: list[str]
     axes: dict[str, list]
-    quantiles: list[float]
+    quantiles: tuple[float, ...]

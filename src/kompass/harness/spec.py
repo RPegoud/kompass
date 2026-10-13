@@ -17,19 +17,6 @@ class TestResults:
     seed: int
 
 
-@dataclass(frozen=True)
-class BenchResults:
-    impl: str
-    params: dict[str, int]
-    dtype: str
-    seed: int
-    times: dict[str, list[float]] | list[float]
-    quantiles: tuple[float, ...]
-    flops: int
-    bytes_moved: int
-    device: str
-
-
 class KernelSpec:
     def __init__(self, op: Op, loader: Loader) -> None:
         self.op = op
@@ -99,10 +86,8 @@ class KernelSpec:
         dtype: torch.dtype,
         device: torch.device,
         seed: int,
-        warmup: int = 25,
-        rep: int = 100,
         quantiles: tuple[float, ...] = (0.2, 0.5, 0.8),
-    ) -> BenchResults:
+    ) -> tuple[float, ...]:
         tensors = self._make_inputs(
             params=params, dtype=dtype, device=device, seed=seed
         )
@@ -110,24 +95,12 @@ class KernelSpec:
         gate = self._check(tensors=tensors, params=params, dtype=dtype, seed=seed)
         if not gate.correct:
             raise ValueError(
-                f"The kernel did not pass the correctness test: {gate.correct=}, {gate.max_abs_diff=}\nAborting benchmark..."
+                f"The kernel {self.name} did not pass the correctness test with params {params=}; {dtype=}: {gate.correct=}, {gate.max_abs_diff=}\nAborting benchmark..."
             )
 
-        times: list[float] = do_bench(
+        times: tuple[float, ...] = do_bench(
             fn=lambda: self.kernel(*tensors),
-            warmup=warmup,
-            rep=rep,
             quantiles=quantiles,
         )  # type: ignore
 
-        return BenchResults(
-            impl=self.name,
-            params=params,
-            dtype=str(dtype),
-            seed=seed,
-            times=times,
-            quantiles=quantiles,
-            flops=self.op.flops(params, dtype),
-            bytes_moved=self.op.bytes_moved(params, dtype),
-            device=str(device),
-        )
+        return times

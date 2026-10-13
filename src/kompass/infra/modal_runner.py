@@ -35,6 +35,7 @@ triton_vol = modal.Volume.from_name(TRITON_VOLUME_NAME)
 @app.function(
     image=cuda_image,
     volumes={CUDA_KERNEL_CACHE_PATH: cuda_vol, TRITON_KERNEL_CACHE_PATH: triton_vol},
+    timeout=1800,  # 30 minutes timeout
 )
 def run_modal_bench(
     payload: Payload,

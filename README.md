@@ -5,4 +5,4 @@
 
 
 # Getting Started
-1. Create a `.env` file based on [example.env](example.env).
+1. Create a `.env` file based on [example.env](example.env)****.

@@ -8,4 +8,4 @@ class Case:
     params: dict[str, int]
     dtype: str
     seed: int
-    quantiles: list[float]
+    quantiles: tuple[float, ...]

@@ -1,0 +1,9 @@
+op: softmax
+impls: [softmax_triton_online, softmax_triton_single_block, softmax_torch]
+axes:
+  M: [4096]
+  # N = [2^7; 2^18]
+  N: [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144]
+  dtypes: [float32, bfloat16]
+seed: 0
+quantiles: [0.2, 0.5, 0.8]

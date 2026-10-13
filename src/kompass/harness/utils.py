@@ -109,5 +109,5 @@ def parse_params(params: list[str], expected: tuple[str, ...]) -> dict[str, int]
     return resolved
 
 
-def get_timestamp() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S")
+def get_timestamp(timezone=UTC) -> str:
+    return datetime.now(timezone).strftime("%Y-%m-%d_%H-%M-%S")

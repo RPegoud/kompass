@@ -19,11 +19,18 @@ class Op(ABC):
 
     @staticmethod
     @abstractmethod
-    def reference(*tensors: torch.Tensor, params: dict[str, int]) -> torch.Tensor:
+    def reference(
+        *tensors: torch.Tensor,
+        params: dict[str, int],
+    ) -> torch.Tensor:
         raise NotImplementedError
 
     @abstractmethod
-    def compare(self, pred: torch.Tensor, ref: torch.Tensor) -> TestResult:
+    def compare(
+        self,
+        pred: torch.Tensor,
+        ref: torch.Tensor,
+    ) -> TestResult:
         raise NotImplementedError
 
     @staticmethod
@@ -44,5 +51,6 @@ class Op(ABC):
 
     @staticmethod
     @abstractmethod
-    def flops(params: dict[str, int], dtype: torch.dtype) -> int:
+    def flops(params: dict[str, int]) -> int:
         raise NotImplementedError
+

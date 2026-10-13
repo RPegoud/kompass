@@ -41,7 +41,7 @@ def vec_add_fwd_kernel(
     tl.store(pointer=Z_ptr + offs, value=Z, mask=mask)
 
 
-def vec_add_triton_v1(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
+def vec_add_triton(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     _check_vec_add_inputs(A, B)
     assert A.ndim == B.ndim == 1, (
         f"This kernel doesn't support batched addition, got {A.ndim=} and {B.ndim=}"
@@ -57,7 +57,7 @@ def vec_add_triton_v1(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
         B,
         C,
         n_cols,
-        BLOCK_SIZE=BLOCK_SIZE,
+        BLOCK_SIZE=BLOCK_SIZE,  # pyright: ignore[reportArgumentType]
     )
 
     return C

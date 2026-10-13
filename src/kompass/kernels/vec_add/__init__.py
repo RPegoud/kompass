@@ -1,3 +1,5 @@
+import math
+from functools import partial
 from pathlib import Path
 
 import torch
@@ -53,27 +55,26 @@ class VecAdd(Op):
         return 3 * params["N"] * dtype.itemsize
 
     @staticmethod
-    def flops(params: dict[str, int], dtype: torch.dtype) -> int:
+    def flops(params: dict[str, int]) -> int:
         return params["N"]
 
-vec_add_torch = KernelSpec(
-    op=VecAdd(),
+VecAddSpec = partial(KernelSpec, op=VecAdd())
+
+vec_add_torch = VecAddSpec(
     loader=TorchLoader(fn=torch.add),
 )
-vec_add_cuda_v1 = KernelSpec(
-    op=VecAdd(),
+vec_add_cuda = VecAddSpec(
     loader=CudaLoader(
-        module_name="vec_add_cuda_v1",
-        fn_name="vec_add_cuda_v1",
+        module_name="vec_add_cuda",
+        fn_name="vec_add_cuda",
         sources=[str(Path(__file__).parent / "vecAdd.cu")],
         supports_backward=False,
     ),
 )
-vec_add_triton_v1 = KernelSpec(
-    op=VecAdd(),
+vec_add_triton = VecAddSpec(
     loader=TritonLoader(
         module_path=f"{__package__}.vec_add",
-        fn_name="vec_add_triton_v1",
+        fn_name="vec_add_triton",
         supports_backward=False,
     ),
 )
@@ -83,8 +84,8 @@ REGISTRY: dict[str, OpEntry] = {
         op=VecAdd(),
         impls={
             "vec_add_torch": vec_add_torch,
-            "vec_add_cuda_v1": vec_add_cuda_v1,
-            "vec_add_triton_v1": vec_add_triton_v1,
+            "vec_add_cuda": vec_add_cuda,
+            "vec_add_triton": vec_add_triton,
         },
     )
 }
