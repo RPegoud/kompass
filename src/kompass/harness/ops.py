@@ -5,7 +5,7 @@ import torch
 
 
 @dataclass
-class TestResult:
+class CompareResult:
     correct: bool
     max_abs_diff: float
 
@@ -30,7 +30,7 @@ class Op(ABC):
         self,
         pred: torch.Tensor,
         ref: torch.Tensor,
-    ) -> TestResult:
+    ) -> CompareResult:
         raise NotImplementedError
 
     @staticmethod

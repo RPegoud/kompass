@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Any
 
 import torch
@@ -7,38 +7,11 @@ import triton.language as tl
 from tqdm.auto import tqdm
 from triton.testing import do_bench
 
-from .harness.case import Case
 from .harness.ops import Op
+from .harness.schema import CaseResult, Payload
 from .harness.spec import KernelSpec
 from .harness.utils import describe_env, resolve_dtype
 from .kernels import REGISTRY
-
-
-@dataclass()
-class Payload:
-    run_id: str
-    op: str
-    cases: list[Case]
-    device: str
-
-
-@dataclass(frozen=True)
-class CaseResult:
-    impl: str
-    params: dict[str, int]
-    dtype: str
-    seed: int
-    quantiles: tuple[float, ...]
-    flops: int
-    bytes_moved: int
-    device: str
-    times: tuple[float, ...] | None
-    status: str
-    free_mem: int
-    reserved_mem: int
-    total_mem: int
-    required_mem: int
-    error: str | None = None
 
 
 @triton.jit

@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 
 from ...harness.loaders import TorchLoader, TritonLoader
-from ...harness.ops import Op, TestResult
+from ...harness.ops import CompareResult, Op
 from ...harness.spec import KernelSpec
 from ...kernels import OpEntry
 
@@ -26,14 +26,14 @@ class Softmax(Op):
         self,
         pred: torch.Tensor,
         ref: torch.Tensor,
-    ) -> TestResult:
+    ) -> CompareResult:
         correct = True
         try:
             torch.testing.assert_close(pred, ref)
         except AssertionError:
             correct = False
 
-        return TestResult(
+        return CompareResult(
             correct=correct,
             max_abs_diff=torch.max(torch.abs(ref - pred)).item(),
         )

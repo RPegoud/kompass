@@ -4,7 +4,7 @@ from pathlib import Path
 import torch
 
 from ...harness.loaders import CudaLoader, TorchLoader, TritonLoader
-from ...harness.ops import Op, TestResult
+from ...harness.ops import CompareResult, Op
 from ...harness.spec import KernelSpec
 from ...kernels import OpEntry
 
@@ -17,8 +17,10 @@ class VecAdd(Op):
         A, B = tensors
         return torch.add(A, B)
 
-    def compare(self, pred: torch.Tensor, ref: torch.Tensor, params=None) -> TestResult:
-        return TestResult(
+    def compare(
+        self, pred: torch.Tensor, ref: torch.Tensor, params=None
+    ) -> CompareResult:
+        return CompareResult(
             correct=torch.equal(pred, ref),
             max_abs_diff=torch.max(torch.abs(ref - pred)).item(),
         )

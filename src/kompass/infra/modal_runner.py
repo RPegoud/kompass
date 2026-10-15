@@ -2,7 +2,7 @@ from typing import Any
 
 import modal
 
-from ..runner import Payload
+from ..harness.schema import Payload
 
 CUDA_VOLUME_NAME = "cuda_kernels"
 TRITON_VOLUME_NAME = "triton_kernels"

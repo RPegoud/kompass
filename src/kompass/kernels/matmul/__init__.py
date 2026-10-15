@@ -3,7 +3,7 @@ from functools import partial
 import torch
 
 from ...harness.loaders import TorchLoader, TritonLoader
-from ...harness.ops import Op, TestResult
+from ...harness.ops import CompareResult, Op
 from ...harness.spec import KernelSpec
 from ...kernels import OpEntry
 
@@ -20,14 +20,14 @@ class Matmul(Op):
         )  # compute the ref in full precision
         return ref.to(dtype)
 
-    def compare(self, pred: torch.Tensor, ref: torch.Tensor) -> TestResult:
+    def compare(self, pred: torch.Tensor, ref: torch.Tensor) -> CompareResult:
         correct = True
         try:
             torch.testing.assert_close(pred, ref)
         except AssertionError:
             correct = False
 
-        return TestResult(
+        return CompareResult(
             correct=correct, max_abs_diff=torch.max(torch.abs(ref - pred)).item()
         )
 

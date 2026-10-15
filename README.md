@@ -8,8 +8,9 @@ operation side by side. Runs can happen on your local GPU or on a cloud GPU thro
 [Modal](https://modal.com).
 
 You describe an **Op** once (how to build inputs, a reference result, a correctness check,
-and FLOP/byte counts). You then register any number of **implementations** of it. Kompass:
+and FLOP/byte counts). You then register any number of **implementations** of it. 
 
+Kompass:
 - **JIT-compiles** CUDA extensions per GPU architecture and source hash, and imports Triton kernels lazily.
 - **Gates every benchmark on correctness**: a kernel whose output doesn't match the reference is never timed.
 - **Sweeps** parameter grids from a YAML file and records each case's status (`ok`, `incorrect`, `oom`, `skipped_oom`, `failed`).
@@ -19,7 +20,7 @@ and FLOP/byte counts). You then register any number of **implementations** of it
 
 ---
 
-## CLI endpoints
+## ⌨️ CLI endpoints
 
 After `uv sync`, all endpoints are available through the `kompass` entry point.
 
@@ -30,7 +31,7 @@ After `uv sync`, all endpoints are available through the `kompass` entry point.
 | `kompass profile <op>/<impl> -p K=V [-p K=V ...] [--dtype float32] [--set full\|roofline\|detailed]` | Profiles one case under `ncu`, then ingests the report automatically. |
 | `kompass ingest <reports/.../report.ncu-rep>` | Parses an existing Nsight Compute report into `records.jsonl` (`profile` calls this for you). |
 
-### Examples
+### 💡 Examples
 
 ```bash
 # What's available?
@@ -50,7 +51,7 @@ kompass profile vec_add/triton -p N=16777216 --dtype float32 --set full
 > `bench` takes the **full** impl names in the YAML (`vec_add_triton`). `profile` takes
 > `op/suffix` (`vec_add/triton`) and joins the two parts with `_`.
 
-### Outputs
+### 📂 Outputs
 
 ```
 logs/<timestamp>_<run_id>/
@@ -68,7 +69,7 @@ one-liner, e.g. `pd.read_json("logs/.../times.jsonl", lines=True)`.
 
 ---
 
-## File tree
+## 🌳 File tree
 
 ```
 .
@@ -93,9 +94,8 @@ one-liner, e.g. `pd.read_json("logs/.../times.jsonl", lines=True)`.
     │   ├── loaders.py          # TorchLoader, TritonLoader, CudaLoader (JIT, per-arch cache)
     │   ├── spec.py             # KernelSpec = Op + Loader; test() and bench()
     │   ├── registry.py         # OpEntry(op, impls)
-    │   ├── case.py, configs.py # Case and SweepConfig dataclasses
+    │   ├── schema.py           # plain dataclasses: SweepConfig, Case, Payload, CaseResult, ProfileRecord
     │   ├── profile.py          # child process launched under ncu (warmup + profiled call)
-    │   ├── records.py          # ProfileRecord
     │   └── utils.py            # env description, impl/dtype resolution, git commit, ...
     ├── cases/                  # sweep definitions (*.yaml)
     │   ├── vec_add_sweep.yaml
@@ -112,12 +112,12 @@ one-liner, e.g. `pd.read_json("logs/.../times.jsonl", lines=True)`.
 
 ---
 
-## Setup
+## 🛠️ Setup
 
 **Requirements:** an NVIDIA GPU with driver ≥ 580 (CUDA 13.x) for local runs, or a
 [Modal](https://modal.com) account for remote runs. Python 3.14 and [uv](https://docs.astral.sh/uv/).
 
-### Option A: devcontainer (recommended)
+### 🐳 Option A: devcontainer (recommended)
 
 1. Create a `.env` file from [example.env](example.env) (the devcontainer passes it to the container):
    ```bash
@@ -131,7 +131,7 @@ one-liner, e.g. `pd.read_json("logs/.../times.jsonl", lines=True)`.
    ncu-check        # only needed for `kompass profile`
    ```
 
-### Option B: bare metal
+### 🖥️ Option B: bare metal
 
 ```bash
 uv sync --frozen
@@ -141,7 +141,7 @@ kompass list
 
 You need `nvcc` on `PATH` for CUDA kernels and `ncu` for profiling.
 
-### Modal (remote GPUs)
+### ☁️ Modal (remote GPUs)
 
 ```bash
 modal token set --token-id $MODAL_TOKEN_ID --token-secret $MODAL_TOKEN_SECRET
@@ -160,7 +160,7 @@ environment. `modal:h100` is pinned to `H100!` so that Modal doesn't silently up
 
 ---
 
-## Adding a kernel
+## 🧩 Adding a kernel
 
 Every Op lives in its own package under `src/kompass/kernels/<op>/`. The walkthrough below
 uses `vec_add`. The same steps apply to any new Op.
@@ -172,7 +172,7 @@ src/kompass/kernels/vec_add/
 └── vecAdd.cu     # CUDA kernel + pybind11 binding
 ```
 
-### 1. Define the Op
+### 📐 1. Define the Op
 
 The Op is the contract that every implementation is tested and measured against:
 
@@ -211,7 +211,7 @@ class VecAdd(Op):
 `bytes_moved` and `flops` give the arithmetic intensity used in the roofline report.
 `bytes_moved` is also used to skip cases that wouldn't fit in GPU memory.
 
-### 2a. Write a Triton kernel
+### 🔱 2a. Write a Triton kernel
 
 A Triton impl is a plain Python function that takes the tensors returned by `make_inputs`
 and returns the output:
@@ -236,7 +236,7 @@ def vec_add_triton(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
     return C
 ```
 
-### 2b. Write a CUDA kernel
+### ⚡ 2b. Write a CUDA kernel
 
 A CUDA impl is a `.cu` file that exposes a function through pybind11. `CudaLoader` compiles it
 with `torch.utils.cpp_extension.load`, caches the build per GPU arch (`sm_XY`) and per source hash,
@@ -270,7 +270,7 @@ at::Tensor vec_add_fwd(const at::Tensor &A, const at::Tensor &B) {
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("vec_add_cuda", &vec_add_fwd); }
 ```
 
-### 3. Register the implementations
+### 📝 3. Register the implementations
 
 Wrap each implementation in a `KernelSpec` (Op + Loader) and expose a `REGISTRY`:
 
@@ -294,7 +294,9 @@ vec_add_cuda = VecAddSpec(
         sources=[str(Path(__file__).parent / "vecAdd.cu")],
     ),
 )
-
+vec_add_torch = VecAddSpec(                    # torch reference
+    loader=TorchLoader(fn=torch.add),          # simply pass the raw function
+)
 REGISTRY: dict[str, OpEntry] = {
     "vec_add": OpEntry(
         op=VecAdd(),
@@ -319,7 +321,7 @@ for r in [_vec_add, ..., _my_op]:
     REGISTRY.update(r)
 ```
 
-### 4. Describe a sweep
+### 🧪 4. Describe a sweep
 
 ```yaml
 # src/kompass/cases/vec_add_sweep.yaml
@@ -332,7 +334,7 @@ seed: 0
 quantiles: [0.2, 0.5, 0.8]        # passed to do_bench
 ```
 
-### 5. Run it
+### 🚀 5. Run it
 
 ```bash
 kompass list                                              # the new impls should be listed
@@ -342,7 +344,7 @@ kompass profile vec_add/cuda -p N=16777216                # Nsight Compute deep 
 
 ---
 
-## Tips
+## 💬 Tips
 
 - **Correctness first.** A failing `compare` marks the case `incorrect` and skips timing.
   Check the `error` field in `times.jsonl` for the max abs diff.
@@ -352,9 +354,10 @@ kompass profile vec_add/cuda -p N=16777216                # Nsight Compute deep 
 - **Autograd.** Set `supports_backward=True` on a loader to have `make_inputs` create tensors
   with `requires_grad=True`.
 - **Roofline.** `meta.json` records the copy bandwidth measured with Triton on the target GPU.
-  Plot achieved GB/s (`bytes_moved / time`) against it, or use [roofline.ipynb](roofline.ipynb).
+  Plot achieved GB/s (`bytes_moved / time`) against it, or use [oofline.ipynb](roofline.ipynb).
 
-## Roadmap
+## 🗺️ Roadmap
 
-See [TODO.md](TODO.md): CUDA-graph timing (`do_bench_cudagraph`), explicit arch flags in
-`CudaLoader`, and a `tune` endpoint.
+- [ ] `Tune` endpoint, takes an op/impl with a single set of parameters and returns the tuned block sizes and number of warps.
+- [ ] `Report` endpoint, filters impl records for a specific device and returns an `.md` file with a detailed performance report and a roofline plot.
+- [ ] Adding support for `Pallas` (JAX) and/or `CuteDSL` kernels.

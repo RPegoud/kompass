@@ -5,7 +5,7 @@ import torch
 from triton.testing import do_bench
 
 from .loaders import Loader
-from .ops import Op, TestResult
+from .ops import CompareResult, Op
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class KernelSpec:
     ) -> TestResults:
         pred = self.kernel(*tensors)
         ref = self.op.reference(*tensors, params=params)
-        res: TestResult = self.op.compare(pred, ref)
+        res: CompareResult = self.op.compare(pred, ref)
         return TestResults(
             correct=res.correct,
             max_abs_diff=res.max_abs_diff,

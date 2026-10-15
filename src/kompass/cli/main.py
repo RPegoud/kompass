@@ -46,12 +46,10 @@ def bench(
 
     from omegaconf import OmegaConf
 
-    from ..harness.case import Case
-    from ..harness.configs import SweepConfig
     from ..harness.ops import Op
+    from ..harness.schema import Case, Payload, SweepConfig
     from ..harness.utils import get_timestamp, git_commit, repo_root
     from ..kernels import REGISTRY
-    from ..runner import Payload
 
     def run_local(
         payload: Payload,
@@ -178,7 +176,7 @@ def ingest(report_file: Path) -> None:
 
     import ncu_report
 
-    from ..harness.records import ProfileRecord
+    from ..harness.schema import ProfileRecord
     from ..harness.utils import repo_root
 
     report_dir = report_file.parent
