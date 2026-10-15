@@ -17,9 +17,9 @@ class Softmax(Op):
         *tensors: torch.Tensor,
         params: dict[str, int],
     ) -> torch.Tensor:
-        x = tensors[0]
-        dtype = x.dtype
-        ref = F.softmax(x, dim=-1, dtype=torch.float32)  # compute ref in full precision
+        X = tensors[0]
+        dtype = X.dtype
+        ref = F.softmax(X, dim=-1, dtype=torch.float32)  # compute ref in full precision
         return ref.to(dtype)
 
     def compare(
@@ -87,7 +87,9 @@ softmax_triton_online = SoftmaxSpec(
         supports_backward=False,
     ),
 )
-softmax_torch = SoftmaxSpec(loader=TorchLoader(torch.softmax, options={"dim": -1}))
+softmax_torch = SoftmaxSpec(
+    loader=TorchLoader(torch.softmax, options={"dim": -1}),
+)
 
 REGISTRY: dict[str, OpEntry] = {
     "softmax": OpEntry(

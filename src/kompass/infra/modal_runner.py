@@ -24,7 +24,7 @@ cuda_image = (
         "./src/kompass",
         copy=False,
         remote_path=KERNEL_REMOTE_PATH,
-        ignore=["*.venv"],
+        ignore=["*.venv", "**/.DS_Store", "**/__pycache__"],
     )
 )
 app = modal.App("cuda-compile-and-run", image=cuda_image)

@@ -10,7 +10,7 @@ inline void check_gemm_inputs(const at::Tensor &X, const at::Tensor &Y) {
   //   TODO: add shape check
 }
 
-__global__ void GemmFwdKernel(float *X, float *Y, float *Z, int M, int N, int K) {
+__global__ void matmulFwdKernel(float *X, float *Y, float *Z, int M, int N, int K) {
   // X is [M, K], Y is [K, N]
   int row = blockDim.y * blockIdx.y + threadIdx.y; // matrix Z row (0 to M-1)
   int col = blockDim.x * blockIdx.x + threadIdx.x; // matrix Z col (0 to N-1)

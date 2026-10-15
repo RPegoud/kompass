@@ -41,4 +41,4 @@ at::Tensor vec_add_fwd(const at::Tensor &A, const at::Tensor &B) {
   return C;
 }
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("vec_add_cuda_v1", &vec_add_fwd); }
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("vec_add_cuda", &vec_add_fwd); }
