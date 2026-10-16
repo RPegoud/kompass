@@ -87,7 +87,7 @@ class KernelSpec:
         device: torch.device,
         seed: int,
         quantiles: tuple[float, ...] = (0.2, 0.5, 0.8),
-    ) -> tuple[float, ...]:
+    ) -> tuple[tuple[float, ...], float]:
         tensors = self._make_inputs(
             params=params, dtype=dtype, device=device, seed=seed
         )
@@ -103,4 +103,4 @@ class KernelSpec:
             quantiles=quantiles,
         )  # type: ignore
 
-        return times
+        return times, gate.max_abs_diff

@@ -1,0 +1,9 @@
+op: matmul
+impls: [matmul_triton_tiled_ieee, matmul_triton_tiled_tf32, matmul_torch]
+axes:
+  M: [4096]
+  N: [64, 128, 256, 512, 1024, 2048, 5096, 8192]
+  K: [4096]
+  dtypes: [float32, bfloat16]
+seed: 0
+quantiles: [0.2, 0.5, 0.8]

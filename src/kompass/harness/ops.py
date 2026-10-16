@@ -12,6 +12,10 @@ class CompareResult:
 
 class Op(ABC):
     param_names: tuple[str, ...]
+    option_names: tuple[str, ...] | None
+
+    def __init__(self, relative_tolerance: float | None = None) -> None:
+        self.relative_tolerance = relative_tolerance
 
     @property
     def name(self) -> str:
@@ -53,4 +57,3 @@ class Op(ABC):
     @abstractmethod
     def flops(params: dict[str, int]) -> int:
         raise NotImplementedError
-

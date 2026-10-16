@@ -45,6 +45,7 @@ class CaseResult:
     bytes_moved: int
     device: str
     times: tuple[float, ...] | None
+    max_abs_diff: float | None
     status: str
     free_mem: int
     reserved_mem: int

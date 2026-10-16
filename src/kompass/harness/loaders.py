@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 import torch
+import triton
 from torch.utils.cpp_extension import load
 
 
@@ -43,6 +44,15 @@ class TritonLoader(Loader):
         self.supports_backward = supports_backward
         self.backend = "triton"
         self.module = None
+        triton.set_allocator(self.alloc_fn)
+
+    @staticmethod
+    def alloc_fn(size: int, alignment: int, stream):
+        """
+        Tensor descriptors require host-side memory allocation during runtime
+        on Hopper/Blackwell.
+        """
+        return torch.empty(size, dtype=torch.int8, device="cuda")
 
     def load(self) -> Callable:
         if self.module is None:

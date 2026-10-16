@@ -78,21 +78,21 @@ def run_bench(
     pbar = tqdm(cases)
 
     for case in pbar:
-        pbar.set_description(f"Benchmarking {case.impl} with {case.params=}")
         spec: KernelSpec = REGISTRY[case.op].impls[case.impl]
         op: Op = REGISTRY[case.op].op
         dtype = resolve_dtype(case.dtype)
+        pbar.set_description(f"Benchmarking {case.impl} with {case.params=}, {dtype=}")
 
         free_mem, total_mem, required_mem, enough_mem = get_mem_reqs(
             op=op, params=case.params, dtype=dtype, device=device
         )
         reserved_mem = torch.cuda.memory_reserved(device)
         status, error = "ok", None
-        case_times = None
+        case_times, max_abs_diff = None, None
 
         if enough_mem:
             try:
-                case_times = spec.bench(
+                case_times, max_abs_diff = spec.bench(
                     params=case.params,
                     dtype=dtype,
                     device=device,
@@ -121,6 +121,7 @@ def run_bench(
             dtype=str(dtype),
             seed=case.seed,
             times=case_times,
+            max_abs_diff=max_abs_diff,
             quantiles=case.quantiles,
             flops=op.flops(case.params),
             bytes_moved=op.bytes_moved(case.params, dtype),

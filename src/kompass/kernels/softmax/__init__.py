@@ -11,6 +11,7 @@ from ...kernels import OpEntry
 
 class Softmax(Op):
     param_names: tuple[str, ...] = ("M", "N")
+    option_names = None
 
     @staticmethod
     def reference(
@@ -26,6 +27,7 @@ class Softmax(Op):
         self,
         pred: torch.Tensor,
         ref: torch.Tensor,
+        options: dict[str, int | str] | None = None,
     ) -> CompareResult:
         correct = True
         try:

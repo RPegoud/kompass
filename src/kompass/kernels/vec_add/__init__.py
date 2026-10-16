@@ -11,14 +11,21 @@ from ...kernels import OpEntry
 
 class VecAdd(Op):
     param_names: tuple[str, ...] = ("N",)
+    option_names = None
 
     @staticmethod
-    def reference(*tensors: torch.Tensor, params=None) -> torch.Tensor:
+    def reference(
+        *tensors: torch.Tensor,
+        params: dict[str, int],
+    ) -> torch.Tensor:
         A, B = tensors
         return torch.add(A, B)
 
     def compare(
-        self, pred: torch.Tensor, ref: torch.Tensor, params=None
+        self,
+        pred: torch.Tensor,
+        ref: torch.Tensor,
+        options: dict[str, int | str] | None = None,
     ) -> CompareResult:
         return CompareResult(
             correct=torch.equal(pred, ref),
@@ -58,6 +65,7 @@ class VecAdd(Op):
     @staticmethod
     def flops(params: dict[str, int]) -> int:
         return params["N"]
+
 
 VecAddSpec = partial(KernelSpec, op=VecAdd())
 

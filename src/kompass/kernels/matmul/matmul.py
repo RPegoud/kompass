@@ -1,9 +1,11 @@
+from typing import Literal
+
 import torch
 import triton
 import triton.language as tl
 
 
-def _check_vec_add_inputs(X: torch.Tensor, Y: torch.Tensor) -> None:
+def _check_matmul_inputs(X: torch.Tensor, Y: torch.Tensor) -> None:
     assert X.shape[1] == Y.shape[0], (
         f"X's column dimension must match Y's row dimension, got {X.shape=}{Y.shape=}"
     )
@@ -35,6 +37,7 @@ def matmul_tiled_fwd(
     BLOCK_SIZE_M: tl.constexpr,
     BLOCK_SIZE_K: tl.constexpr,
     BLOCK_SIZE_N: tl.constexpr,
+    input_precision: tl.constexpr,
 ):
     m_idx = tl.program_id(axis=0)
     n_idx = tl.program_id(axis=1)
@@ -49,16 +52,16 @@ def matmul_tiled_fwd(
         base=Y_ptr,
         shape=[K, N],
         strides=[Y_k_stride, Y_n_stride],
-        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_M],
+        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
     )
     z_desc = tl.make_tensor_descriptor(
         base=Z_ptr,
         shape=[M, N],
         strides=[Z_m_stride, Z_n_stride],
-        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_M],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
     )
 
-    z_acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_M), dtype=tl.float32)
+    z_acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     m_offset = m_idx * BLOCK_SIZE_M
     n_offset = n_idx * BLOCK_SIZE_N
@@ -66,13 +69,15 @@ def matmul_tiled_fwd(
     for k_offset in range(0, K, BLOCK_SIZE_K):
         x = x_desc.load([m_offset, k_offset])
         y = y_desc.load([k_offset, n_offset])
-        z_acc += tl.dot(x, y)
+        z_acc += tl.dot(x, y, input_precision=input_precision)
 
     z_desc.store([m_offset, n_offset], z_acc)
 
 
-def triton_matmul_tiled(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-    _check_vec_add_inputs(X, Y)
+def matmul_tiled_triton(
+    X: torch.Tensor, Y: torch.Tensor, input_precision: Literal["ieee", "tf32"]
+) -> torch.Tensor:
+    _check_matmul_inputs(X, Y)
     M, K = X.shape
     _, N = Y.shape
 
@@ -82,8 +87,8 @@ def triton_matmul_tiled(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
     Y_k_stride, Y_n_stride = Y.stride()
     Z_m_stride, Z_n_stride = Z.stride()
 
-    BLOCK_SIZE_M = 64
-    BLOCK_SIZE_N = 64
+    BLOCK_SIZE_M = 16  # TODO: tune
+    BLOCK_SIZE_N = 32
     BLOCK_SIZE_K = 64
 
     NUM_BLOCKS_M = triton.cdiv(M, BLOCK_SIZE_M)
@@ -105,6 +110,14 @@ def triton_matmul_tiled(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
         BLOCK_SIZE_M=BLOCK_SIZE_M,  # type: ignore
         BLOCK_SIZE_N=BLOCK_SIZE_N,  # type: ignore
         BLOCK_SIZE_K=BLOCK_SIZE_K,  # type: ignore
+        input_precision=input_precision,  # type: ignore
     )
 
     return Z
+
+def matmul_tiled_ieee_triton(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+    return matmul_tiled_triton(X, Y, input_precision="ieee")
+
+
+def matmul_tiled_tf32_triton(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+    return matmul_tiled_triton(X, Y, input_precision="tf32")

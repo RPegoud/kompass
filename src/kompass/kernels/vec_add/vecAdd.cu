@@ -35,10 +35,12 @@ at::Tensor vec_add_fwd(const at::Tensor &A, const at::Tensor &B) {
   vecAddFwdKernel<<<(n + threads - 1) / threads, threads>>>(
       A.data_ptr<float>(), B.data_ptr<float>(), C.data_ptr<float>(), n);
 
-
-  CUDA_CHECK(cudaGetLastError()); // catch config errors (e.g. invalid block size)
+  CUDA_CHECK(
+      cudaGetLastError()); // catch config errors (e.g. invalid block size)
 
   return C;
 }
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("vec_add_cuda", &vec_add_fwd); }
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("vec_add_cuda", &vec_add_fwd);
+}

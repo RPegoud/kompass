@@ -1,5 +1,3 @@
-from functools import partial
-
 import torch
 
 from ...harness.loaders import TorchLoader, TritonLoader
@@ -10,22 +8,29 @@ from ...kernels import OpEntry
 
 class Matmul(Op):
     param_names: tuple[str, ...] = ("M", "N", "K")
+    option_names: tuple[str, ...] | None = ("input_precision",)
 
     @staticmethod
-    def reference(*tensors: torch.Tensor, params: dict[str, int]) -> torch.Tensor:
+    def reference(
+        *tensors: torch.Tensor,
+        params: dict[str, int],
+    ) -> torch.Tensor:
         X, Y = tensors
         dtype = X.dtype
         ref = torch.matmul(
-            X.to(dtype), Y.to(dtype)
+            X.to(torch.float32), Y.to(torch.float32)
         )  # compute the ref in full precision
         return ref.to(dtype)
 
-    def compare(self, pred: torch.Tensor, ref: torch.Tensor) -> CompareResult:
-        correct = True
-        try:
-            torch.testing.assert_close(pred, ref)
-        except AssertionError:
-            correct = False
+    def compare(
+        self,
+        pred: torch.Tensor,
+        ref: torch.Tensor,
+    ) -> CompareResult:
+        """Use the Frobenius norm to compare the reference and predicted values."""
+        norm = lambda x: torch.linalg.vector_norm(x, ord=2)
+        print(f"{pred.abs().sum()=}")
+        correct = (norm(pred - ref) / norm(ref)) < 1e-2
 
         return CompareResult(
             correct=correct, max_abs_diff=torch.max(torch.abs(ref - pred)).item()
@@ -67,16 +72,23 @@ class Matmul(Op):
         return 2 * M * N * K
 
 
-MatmulSpec = partial(KernelSpec, op=Matmul())
+matmul_torch = KernelSpec(op=Matmul(), loader=TorchLoader(fn=torch.matmul))
 
-matmul_torch = MatmulSpec(loader=TorchLoader(fn=torch.matmul))
-
-matmul_triton_tiled = MatmulSpec(
+matmul_triton_tiled_ieee = KernelSpec(
+    op=Matmul(),
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
-        fn_name="triton_matmul_tiled",
+        fn_name="triton_matmul_tiled_ieee",
         supports_backward=False,
-    )
+    ),
+)
+matmul_triton_tiled_tf32 = KernelSpec(
+    op=Matmul(relative_tolerance=1e-2),
+    loader=TritonLoader(
+        module_path=f"{__package__}.matmul",
+        fn_name="triton_matmul_tiled_tf32",
+        supports_backward=False,
+    ),
 )
 
 # matmul_cuda_naive = MatmulSpec(loader=CudaLoader(...))
@@ -85,7 +97,8 @@ REGISTRY: dict[str, OpEntry] = {
     "matmul": OpEntry(
         op=Matmul(),
         impls={
-            "matmul_triton_tiled": matmul_triton_tiled,
+            "matmul_triton_tiled_ieee": matmul_triton_tiled_ieee,
+            "matmul_triton_tiled_tf32": matmul_triton_tiled_tf32,
             "matmul_torch": matmul_torch,
         },
     )
