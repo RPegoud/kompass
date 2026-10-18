@@ -115,9 +115,9 @@ def matmul_tiled_triton(
 
     return Z
 
-def matmul_tiled_ieee_triton(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+def matmul_triton_tiled_ieee(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
     return matmul_tiled_triton(X, Y, input_precision="ieee")
 
 
-def matmul_tiled_tf32_triton(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
+def matmul_triton_tiled_tf32(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
     return matmul_tiled_triton(X, Y, input_precision="tf32")

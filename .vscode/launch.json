@@ -13,16 +13,28 @@
             "args": "${command:pickArgs}"
         },
         {
-            "name": "VecAdd Sweep",
+            "name": "Matmul square",
             "type": "debugpy",
             "request": "launch",
             "module": "src.kompass.cli.main",
             "args": [
                 "bench",
-                "src/kompass/cases/vec_add_sweep.yaml",
+                "src/kompass/cases/matmul_square.yaml",
                 "--backend",
                 "modal:t4"
             ]
         },
+        {
+            "name": "Matmul K",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.kompass.cli.main",
+            "args": [
+                "bench",
+                "src/kompass/cases/matmul_square.yaml",
+                "--backend",
+                "modal:t4"
+            ]
+        }
     ]
 }

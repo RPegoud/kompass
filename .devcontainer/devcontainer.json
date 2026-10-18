@@ -27,7 +27,8 @@
         "Gruntfuggly.todo-tree",
         "ms-toolsai.jupyter",
         "ms-toolsai.jupyter-renderers",
-        "yzhang.markdown-all-in-one"
+        "yzhang.markdown-all-in-one",
+        "redhat.vscode-yaml"
       ],
       "settings": {
         "C_Cpp.intelliSenseEngine": "disabled",

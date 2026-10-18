@@ -1,7 +1,9 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import torch
+if TYPE_CHECKING:
+    import torch
 
 
 @dataclass
@@ -19,7 +21,7 @@ class Op(ABC):
 
     @property
     def name(self) -> str:
-        return type(self).__name__
+        return type(self).__name__.lower()
 
     @staticmethod
     @abstractmethod

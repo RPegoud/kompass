@@ -12,8 +12,16 @@ class SweepConfig:
     op: str
     seed: int
     impls: list[str]
-    axes: dict[str, list]
     quantiles: tuple[float, ...]
+    dtypes: list[str]
+    shapes: list[dict[str, int]] | None = None
+    axes: dict[str, list[int]] | None = None
+
+    def __post_init__(self):
+        if bool(self.axes) == bool(self.shapes):
+            raise ValueError(
+                f"Exactly one of `axes` or `shapes` should be defined. Got: {self.axes=} and {self.shapes=}"
+            )
 
 
 @dataclass()

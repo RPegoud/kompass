@@ -30,6 +30,58 @@ def registry():
 
 
 @app.command()
+def runs(
+    op: Annotated[
+        str | None, typer.Option(help="Op to filter for, e.g. `matmul`")
+    ] = None,
+    cfg: Annotated[
+        str | None, typer.Option(help="Config to filter for, e.g. `matmul_k_sweep`")
+    ] = None,
+    n: Annotated[int, typer.Option(help="Maximum number of logs to show")] = 20,
+):
+    """Lists the most recent runs recorded in `logs`."""
+    import json
+    import os
+
+    from rich.console import Console
+    from rich.table import Table
+
+    from ..harness.utils import repo_root
+
+    root = repo_root()
+    logs_dir = root / "logs"
+    logs = sorted(os.listdir(logs_dir), reverse=True)
+
+    console = Console()
+    table = Table(title="Logs")
+    table.add_column("Path")
+    table.add_column("Timestamp")
+    table.add_column("Uid")
+    table.add_column("Op")
+    table.add_column("Config")
+
+    counter = 0
+
+    for log in logs:
+        ts, op_name, uid = log.split("__", 3)
+        if op and op_name != op:
+            continue
+
+        with open(str(logs_dir / log / "meta.json"), "r") as f:
+            meta = json.load(f)
+            cfg_name = meta["cfg_name"]
+        if cfg and cfg != cfg_name:
+            continue
+
+        table.add_row(log, ts, uid, op_name, cfg_name)
+        counter += 1
+
+        if counter == n:
+            break
+    console.print(table)
+
+
+@app.command()
 def bench(
     sweep_cfg: Annotated[str, typer.Argument(help="Path to cases/*.yaml")],
     backend: Annotated[
@@ -71,40 +123,50 @@ def bench(
     run_id = uuid.uuid4().hex[:8]
     timestamp = get_timestamp()
 
-    output_dir = repo_root() / "logs" / f"{timestamp}_{run_id}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    meta_file = output_dir / "meta.json"
-    times_file = output_dir / "times.jsonl"
-
-    sweep_path = Path(sweep_cfg)
-    cfg_name = sweep_path.stem
-
     raw = OmegaConf.to_container(OmegaConf.load(sweep_cfg), resolve=True)
     if not isinstance(raw, dict):
         raise typer.BadParameter(
             f"{sweep_cfg} must contain a mapping, got {type(raw).__name__}"
         )
     cfg = SweepConfig(run_id=run_id, **{str(k): v for (k, v) in raw.items()})
-
-    axes: dict[str, list] = cfg.axes
     op: Op = REGISTRY[cfg.op].op
+
+    sweep_path = Path(sweep_cfg)
+    cfg_name = sweep_path.stem
+    output_dir = repo_root() / "logs" / f"{timestamp}__{op.name}__{run_id}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    meta_file = output_dir / "meta.json"
+    times_file = output_dir / "times.jsonl"
+
+    params_set: list[dict[str, int]]
+    if cfg.shapes is not None:
+        params_set = cfg.shapes
+    elif cfg.axes is not None:
+        params_set = [
+            dict(zip(cfg.axes.keys(), values)) for values in product(*cfg.axes.values())
+        ]
+    else:
+        raise ValueError("Neither `axes` nor `shapes` is set.")
+
     param_names = op.param_names
-    resolved_params = {
-        param: val for (param, val) in [(p, axes[p]) for p in param_names]
-    }
-    dtypes = axes["dtypes"]
-    grid = list(product(cfg.impls, dtypes, *[resolved_params[p] for p in param_names]))
+    for ps in params_set:
+        if set(ps) != set(param_names):
+            raise typer.BadParameter(
+                f"{cfg.op} expects {param_names}, got {sorted(ps)}"
+            )
+
+    grid = list(product(cfg.impls, cfg.dtypes, params_set))
 
     cases = [
         Case(
             op=cfg.op,
             impl=impl,
-            params={param: int(val) for (param, val) in zip(param_names, params)},
+            params=params,
             dtype=dtype,
             seed=cfg.seed,
             quantiles=cfg.quantiles,
         )
-        for impl, dtype, *params in grid
+        for impl, dtype, params in grid
     ]
 
     payload = Payload(
@@ -166,6 +228,7 @@ def bench(
     typer.echo(
         f"Run complete!\nSummary:{json.dumps(Counter([r['status'] for r in times]), indent=2)}"
     )
+
 
 @app.command()
 def ingest(report_file: Path) -> None:

@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Protocol
 
 import torch
-import triton
-from torch.utils.cpp_extension import load
 
 
 class Loader(Protocol):
@@ -44,7 +42,6 @@ class TritonLoader(Loader):
         self.supports_backward = supports_backward
         self.backend = "triton"
         self.module = None
-        triton.set_allocator(self.alloc_fn)
 
     @staticmethod
     def alloc_fn(size: int, alignment: int, stream):
@@ -56,6 +53,9 @@ class TritonLoader(Loader):
 
     def load(self) -> Callable:
         if self.module is None:
+            import triton
+
+            triton.set_allocator(self.alloc_fn)
             self.module = importlib.import_module(self.module_path)
             self.kernel: Callable = getattr(self.module, self.fn_name)
         return self.kernel
@@ -78,6 +78,8 @@ class CudaLoader(Loader):
 
     def load(self) -> Callable:
         if self.module is None:
+            from torch.utils.cpp_extension import load
+
             major, minor = torch.cuda.get_device_capability()
             arch = f"{major}.{minor}"
             src_hash = hashlib.sha256(
