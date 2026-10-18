@@ -1,13 +1,18 @@
+from __future__ import annotations
+
 import re
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import torch
 import typer
 
-from .ops import Op
-from .spec import KernelSpec
+if TYPE_CHECKING:
+    import torch
+
+    from .ops import Op
+    from .spec import KernelSpec
 
 
 def describe_env() -> dict[str, str | int | None]:
@@ -61,6 +66,7 @@ def resolve_impl(name: str) -> tuple[Op, KernelSpec]:
 
 
 def resolve_dtype(dtype: torch.dtype | str) -> torch.dtype:
+    import torch
     if not isinstance(dtype, torch.dtype):
         dtype = getattr(torch, dtype)
         assert isinstance(dtype, torch.dtype), (
@@ -110,4 +116,4 @@ def parse_params(params: list[str], expected: tuple[str, ...]) -> dict[str, int]
 
 
 def get_timestamp(timezone=UTC) -> str:
-    return datetime.now(timezone).strftime("%Y-%m-%d_%H-%M-%S")
+    return datetime.now(timezone).strftime("%y-%m-%d_%H-%M-%S")

@@ -29,7 +29,6 @@ class Matmul(Op):
     ) -> CompareResult:
         """Use the Frobenius norm to compare the reference and predicted values."""
         norm = lambda x: torch.linalg.vector_norm(x, ord=2)
-        print(f"{pred.abs().sum()=}")
         correct = (norm(pred - ref) / norm(ref)) < 1e-2
 
         return CompareResult(
@@ -78,7 +77,7 @@ matmul_triton_tiled_ieee = KernelSpec(
     op=Matmul(),
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
-        fn_name="triton_matmul_tiled_ieee",
+        fn_name="matmul_triton_tiled_ieee",
         supports_backward=False,
     ),
 )
@@ -86,7 +85,7 @@ matmul_triton_tiled_tf32 = KernelSpec(
     op=Matmul(relative_tolerance=1e-2),
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
-        fn_name="triton_matmul_tiled_tf32",
+        fn_name="matmul_triton_tiled_tf32",
         supports_backward=False,
     ),
 )

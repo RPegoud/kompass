@@ -3,6 +3,6 @@ impls: [softmax_triton_online, softmax_torch]
 axes:
   M: [1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 4096, 16384]
   N: [4096]
-  dtypes: [float32]
+dtypes: [float32]
 seed: 0
 quantiles: [0.2, 0.5, 0.8]

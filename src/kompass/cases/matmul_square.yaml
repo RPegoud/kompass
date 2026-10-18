@@ -1,0 +1,12 @@
+op: matmul
+impls: [matmul_triton_tiled_ieee, matmul_triton_tiled_tf32, matmul_torch]
+shapes:
+  - { M: 256, N: 256, K: 256 }
+  - { M: 512, N: 512, K: 512 }
+  - { M: 1024, N: 1024, K: 1024 }
+  - { M: 2048, N: 2048, K: 2048 }
+  - { M: 4096, N: 4096, K: 4096 }
+  - { M: 8192, N: 8192, K: 8192 }
+dtypes: [float32, bfloat16]
+seed: 0
+quantiles: [0.2, 0.5, 0.8]

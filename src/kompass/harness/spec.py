@@ -1,11 +1,12 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-
-import torch
-from triton.testing import do_bench
+from typing import TYPE_CHECKING
 
 from .loaders import Loader
 from .ops import CompareResult, Op
+
+if TYPE_CHECKING:
+    import torch
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,8 @@ class KernelSpec:
             raise ValueError(
                 f"The kernel {self.name} did not pass the correctness test with params {params=}; {dtype=}: {gate.correct=}, {gate.max_abs_diff=}\nAborting benchmark..."
             )
+
+        from triton.testing import do_bench
 
         times: tuple[float, ...] = do_bench(
             fn=lambda: self.kernel(*tensors),
