@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, cast
 
 import torch
 import triton
@@ -83,10 +83,6 @@ def matmul_tiled_triton(
 
     Z = torch.empty((M, N), device="cuda", dtype=X.dtype)
 
-    X_m_stride, X_k_stride = X.stride()
-    Y_k_stride, Y_n_stride = Y.stride()
-    Z_m_stride, Z_n_stride = Z.stride()
-
     BLOCK_SIZE_M = 16  # TODO: tune
     BLOCK_SIZE_N = 32
     BLOCK_SIZE_K = 64
@@ -96,14 +92,14 @@ def matmul_tiled_triton(
 
     matmul_tiled_fwd[(NUM_BLOCKS_M, NUM_BLOCKS_N)](
         X_ptr=X,
-        X_m_stride=X_m_stride,
-        X_k_stride=X_k_stride,
+        X_m_stride=X.stride(0),
+        X_k_stride=X.stride(1),
         Y_ptr=Y,
-        Y_k_stride=Y_k_stride,
-        Y_n_stride=Y_n_stride,
+        Y_k_stride=Y.stride(0),
+        Y_n_stride=Y.stride(1),
         Z_ptr=Z,
-        Z_m_stride=Z_m_stride,
-        Z_n_stride=Z_n_stride,
+        Z_m_stride=Z.stride(0),
+        Z_n_stride=Z.stride(1),
         M=M,
         K=K,
         N=N,
@@ -115,9 +111,133 @@ def matmul_tiled_triton(
 
     return Z
 
+
 def matmul_triton_tiled_ieee(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
     return matmul_tiled_triton(X, Y, input_precision="ieee")
 
 
 def matmul_triton_tiled_tf32(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
     return matmul_tiled_triton(X, Y, input_precision="tf32")
+
+
+# === L2 Cache Swizzle ===
+def get_swizzled_ordering(
+    M, N, BLOCK_SIZE_M, BLOCK_SIZE_N, GROUP_SIZE_M
+) -> tuple[int, int]:
+    pid = cast(int, tl.program_id(0))
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    num_pid_in_group = GROUP_SIZE_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_SIZE_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
+    pid_m = cast(int, first_pid_m + ((pid % num_pid_in_group) % group_size_m))
+    pid_n = cast(int, (pid % num_pid_in_group) // group_size_m)
+
+    return pid_m, pid_n
+
+
+@triton.jit
+def matmul_tiled_l2_swizzle_fwd(
+    X_ptr,
+    X_m_stride,
+    X_k_stride,
+    Y_ptr,
+    Y_k_stride,
+    Y_n_stride,
+    Z_ptr,
+    Z_m_stride,
+    Z_n_stride,
+    M,
+    K,
+    N,
+    BLOCK_SIZE_M: tl.constexpr,
+    BLOCK_SIZE_K: tl.constexpr,
+    BLOCK_SIZE_N: tl.constexpr,
+    GROUP_SIZE_M: tl.constexpr,
+    input_precision: tl.constexpr,
+):
+    pid_m, pid_n = get_swizzled_ordering(M, N, BLOCK_SIZE_M, BLOCK_SIZE_N, GROUP_SIZE_M)
+
+    x_desc = tl.make_tensor_descriptor(
+        base=X_ptr,
+        shape=[M, K],
+        strides=[X_m_stride, X_k_stride],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_K],
+    )
+    y_desc = tl.make_tensor_descriptor(
+        base=Y_ptr,
+        shape=[K, N],
+        strides=[Y_k_stride, Y_n_stride],
+        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
+    )
+    z_desc = tl.make_tensor_descriptor(
+        base=Z_ptr,
+        shape=[M, N],
+        strides=[Z_m_stride, Z_n_stride],
+        block_shape=[BLOCK_SIZE_M, BLOCK_SIZE_N],
+    )
+
+    z_acc = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+    m_offset = pid_m * BLOCK_SIZE_M
+    n_offset = pid_n * BLOCK_SIZE_N
+
+    for k_offset in range(0, K, BLOCK_SIZE_K):
+        x = x_desc.load([m_offset, k_offset])
+        y = y_desc.load([k_offset, n_offset])
+        z_acc += tl.dot(x, y, input_precision=input_precision)
+
+    z_desc.store([m_offset, n_offset], z_acc)
+
+
+def matmul_tiled_l2_swizzle_triton(
+    X: torch.Tensor, Y: torch.Tensor, input_precision: Literal["ieee", "tf32"]
+) -> torch.Tensor:
+    _check_matmul_inputs(X, Y)
+    M, K = X.shape
+    _, N = Y.shape
+
+    Z = torch.empty((M, N), device="cuda", dtype=X.dtype)
+
+    grid = lambda META: (
+        triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
+    )
+
+    BLOCK_SIZE_M = 16  # TODO: tune
+    BLOCK_SIZE_N = 32
+    BLOCK_SIZE_K = 64
+    GROUP_SIZE_M = 8
+
+    matmul_tiled_l2_swizzle_fwd[grid](
+        X_ptr=X,
+        X_m_stride=X.stride(0),
+        X_k_stride=X.stride(1),
+        Y_ptr=Y,
+        Y_k_stride=Y.stride(0),
+        Y_n_stride=Y.stride(1),
+        Z_ptr=Z,
+        Z_m_stride=Z.stride(0),
+        Z_n_stride=Z.stride(1),
+        M=M,
+        K=K,
+        N=N,
+        BLOCK_SIZE_M=BLOCK_SIZE_M,  # type: ignore
+        BLOCK_SIZE_K=BLOCK_SIZE_K,  # type: ignore
+        BLOCK_SIZE_N=BLOCK_SIZE_N,  # type: ignore
+        GROUP_SIZE_M=GROUP_SIZE_M,  # type: ignore
+        input_precision=input_precision,  # type: ignore
+    )
+
+    return Z
+
+
+def matmul_triton_tiled_l2_swizzle_ieee(
+    X: torch.Tensor, Y: torch.Tensor
+) -> torch.Tensor:
+    return matmul_tiled_l2_swizzle_triton(X, Y, input_precision="ieee")
+
+
+def matmul_triton_tiled_l2_swizzle_tf32(
+    X: torch.Tensor, Y: torch.Tensor
+) -> torch.Tensor:
+    return matmul_tiled_l2_swizzle_triton(X, Y, input_precision="tf32")

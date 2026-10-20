@@ -19,7 +19,7 @@ class Loader(Protocol):
 
 class TorchLoader(Loader):
     def __init__(self, fn: Callable, options: dict[str, int | str] | None = None):
-        self.fn_name = f"torch_{fn.__name__}"
+        self.fn_name = f"{fn.__name__}_torch"
         self.supports_backward = True
         if options:
             self.fn = partial(fn, **options)

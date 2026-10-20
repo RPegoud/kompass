@@ -25,7 +25,7 @@ def registry():
     for op_name in REGISTRY:
         for impl in REGISTRY[op_name].impls:
             table.add_row(op_name, impl)
-
+        table.add_section()
     console.print(table)
 
 
@@ -69,7 +69,7 @@ def runs(
 
         with open(str(logs_dir / log / "meta.json"), "r") as f:
             meta = json.load(f)
-            cfg_name = meta["cfg_name"]
+            cfg_name = meta.get("cfg_name", "-")  # profile runs have no sweep config
         if cfg and cfg != cfg_name:
             continue
 
@@ -278,7 +278,7 @@ def ingest(report_file: Path) -> None:
             rec[f"param_{p_name}"] = p_value
 
     logs_dir = Path(repo_root()) / "logs"
-    records_dir = logs_dir / f"{ts}_{uid}"
+    records_dir = logs_dir / f"{ts}__{meta['op']}__{uid}"
     records_dir.mkdir(parents=True, exist_ok=True)
 
     with open(records_dir / "records.jsonl", "w", encoding="utf-8") as f:
@@ -326,8 +326,9 @@ def profile(
         resolve_impl,
     )
 
-    op, impl = resolve_impl(registry_key)
-    params = parse_params(p, expected=impl.op.param_names)
+    op, _ = resolve_impl(registry_key)
+    params = parse_params(p, expected=op.param_names)
+    op_key, _, impl_suffix = registry_key.partition("/")
     ts = get_timestamp()
 
     run_dir = (
@@ -338,8 +339,8 @@ def profile(
     meta_file.write_text(
         json.dumps(
             {
-                "op": op,
-                "impl": impl,
+                "op": op_key,
+                "impl": impl_suffix,
                 "params": params,
                 "dtype": dtype,
                 "device": device,
@@ -372,6 +373,34 @@ def profile(
     if rc == 0:
         ingest(run_dir / "report.ncu-rep")
     raise typer.Exit(rc)
+
+@app.command()
+def report(
+    cfg_name: Annotated[str | None, typer.Option("--cfg")] = None,
+    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
+    gpu: Annotated[str | None, typer.Option("--gpu")] = None,
+    baseline: Annotated[
+        str | None,
+        typer.Option(
+            "--baseline", help="impl name as recorded; default: the torch_* impl"
+        ),
+    ] = None,
+    out: Annotated[str, typer.Option("--out")] = "reports",
+):
+    """Generate plots and a summary table from benchmark records."""
+    from ..harness.report import generate_report
+    from ..harness.utils import repo_root
+
+    root = repo_root()
+    summary = generate_report(
+        logs_dir=root / "logs",
+        out_dir=root / out / (cfg_name or "all"),
+        cfg_name=cfg_name,
+        run_id=run_id,
+        gpu=gpu,
+        baseline=baseline,
+    )
+    print(f"wrote {summary} and {summary.parent / 'report.pdf'}")
 
 
 if __name__ == "__main__":
