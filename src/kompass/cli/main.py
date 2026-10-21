@@ -374,6 +374,7 @@ def profile(
         ingest(run_dir / "report.ncu-rep")
     raise typer.Exit(rc)
 
+
 @app.command()
 def report(
     cfg_name: Annotated[str | None, typer.Option("--cfg")] = None,

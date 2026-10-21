@@ -30,7 +30,7 @@ After `uv sync`, all endpoints are available through the `kompass` entry point.
 | `kompass bench <cases/*.yaml> [--backend local\|modal:<gpu>] [--device cuda:0]` | Runs a sweep: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. |
 | `kompass profile <op>/<impl> -p K=V [-p K=V ...] [--dtype float32] [--set full\|roofline\|detailed]` | Profiles one case under `ncu`, then ingests the report automatically. |
 | `kompass ingest <reports/.../report.ncu-rep>` | Parses an existing Nsight Compute report into `records.jsonl` (`profile` calls this for you). |
-| `kompass report [--cfg <name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<cfg>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. The baseline defaults to the `torch_*` impl. |
+| `kompass report [--cfg <name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<cfg>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. One section per op; each op's baseline defaults to its `torch` impl. |
 
 ### 💡 Examples
 

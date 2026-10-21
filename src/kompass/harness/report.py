@@ -3,6 +3,10 @@
 Pure data -> plots. No torch, no CUDA, no Modal, no browser: runs on a laptop.
 Plots are rendered by xy's native exporter to PNG (embedded in summary.md)
 and gathered into a single multi-page vector PDF (report.pdf).
+
+Every case is scored against its own ceiling,
+    min(compute peak of the arithmetic it runs, copy bandwidth x intensity),
+so memory- and compute-bound kernels are judged on one scale.
 """
 
 from __future__ import annotations
@@ -18,27 +22,22 @@ import pandas as pd
 import xy
 from pypdf import PdfWriter
 
-# Vendor spec sheets. Dashed reference lines only -- never reachable in practice.
-# H100 SXM5: HBM3 3.35 TB/s; dense (non-sparse) tensor-core TFLOPS.
-# fp32 is the non-tensor CUDA-core number.
+# Dense vendor peaks in TFLOPS, keyed by the record's `math` (KernelSpec.math).
+# H100 SXM5: float32 on CUDA cores; tf32 / bfloat16 on tensor cores.
 VENDOR_PEAKS: dict[str, dict[str, float]] = {
-    "NVIDIA H100 80GB HBM3": {
-        "bandwidth_gbps": 3350.0,
-        "tflops_torch.float32": 67.0,  # CUDA cores, no tensor cores
-        "tflops_tf32": 494.5,  # tensor cores, tf32
-        "tflops_torch.bfloat16": 989.4,  # tensor cores, bf16 dense
-    },
+    "NVIDIA H100 80GB HBM3": {"float32": 67.0, "tf32": 494.5, "bfloat16": 989.4},
 }
 
+SURFACE = "#FEFEFE"
+GRID = "#EAEAEA"
+TEXT = "#000000"
+MUTED = "#020202A2"  # reference lines / roofline / baseline: never a palette hue
+PALETTE = ["#780116", "#f7b538", "#db7c26", "#d8572a", "#c32f27"]
 
-@dataclass(frozen=True)
-class Roofs:
-    """Ceilings for one (gpu, dtype) pair, in native units."""
 
-    memory_gbps: float | None
-    compute_tflops: float | None  # empirical: best observed torch impl
-    vendor_bandwidth_gbps: float | None
-    vendor_tflops: float | None
+SYMBOLS = ["circle", "square", "diamond", "triangle", "hexagon", "pentagon", "star"]
+
+WIDTH, HEIGHT = 1000, 520
 
 
 def load_records(
@@ -53,30 +52,28 @@ def load_records(
     Rows are self-describing, so the directory layout is irrelevant here --
     we glob everything and filter on fields.
     """
-    rows: list[dict[str, Any]] = []
-    for f in sorted(logs_dir.glob("*/times.jsonl")):
-        for line in f.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                rows.append(json.loads(line))
-
+    rows = [
+        json.loads(line)
+        for f in sorted(logs_dir.glob("*/times.jsonl"))
+        for line in f.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     if not rows:
         raise FileNotFoundError(f"no records found under {logs_dir}")
 
     df = pd.DataFrame(rows)
-
     if cfg_name is not None:
         df = df[df["cfg_name"] == cfg_name]
     if run_id is not None:
         df = df[df["run_id"] == run_id]
     if gpu is not None:
         df = df[df["device_name"] == gpu]
-
     if df.empty:
         raise ValueError("no records left after filtering")
 
     # Mixing GPUs in one plot is meaningless; make the caller choose.
     gpus = df["device_name"].unique()
-    if len(gpus) > 1 and gpu is None:
+    if len(gpus) > 1:
         raise ValueError(f"records span multiple GPUs {list(gpus)}; pass --gpu")
 
     if latest_only and run_id is None:
@@ -90,83 +87,95 @@ def load_records(
     return df.reset_index(drop=True)
 
 
+def qname(q: float) -> str:
+    """0.2 -> 'p20', 0.995 -> 'p99.5'."""
+    return f"p{q * 100:g}"
+
+
+def _time_stats(times: list[float], qs: list[float]) -> dict[str, float]:
+    """Headline time = quantile closest to the median; whiskers = the
+    outermost two. `times` (ms) is in `quantiles` order (do_bench)."""
+    lo, hi = qs.index(min(qs)), qs.index(max(qs))
+    center = min(range(len(qs)), key=lambda i: abs(qs[i] - 0.5))
+    return {
+        "t_ms": times[center],
+        "t_lo_ms": times[lo],
+        "t_hi_ms": times[hi],
+        "q_center": qs[center],
+        "q_lo": qs[lo],
+        "q_hi": qs[hi],
+    }
+
+
 def add_derived(df: pd.DataFrame) -> pd.DataFrame:
-    """Add the columns the plots actually use.
+    """Throughputs, sizes and the per-case ceiling, for the ok rows of one op."""
+    df = df[df["status"] == "ok"].copy()
+    df = df.join(
+        pd.DataFrame(
+            [_time_stats(t, q) for t, q in zip(df["times"], df["quantiles"])],
+            index=df.index,
+        )
+    )
 
-    `times` is [p20, p50, p80] in milliseconds (do_bench quantile order).
-    """
-    df = df.copy()
-
-    ok = df["status"] == "ok"
-    times = df.loc[ok, "times"]
-
-    df.loc[ok, "p20_ms"] = times.map(lambda t: t[0])  # type: ignore
-    df.loc[ok, "p50_ms"] = times.map(lambda t: t[1])  # type: ignore
-    df.loc[ok, "p80_ms"] = times.map(lambda t: t[2])  # type: ignore
-
-    secs = df["p50_ms"] * 1e-3
+    secs = df["t_ms"] * 1e-3
     df["tflops"] = df["flops"] / secs / 1e12
-    df["bandwidth_gbps"] = df["bytes_moved"] / secs / 1e9
-
-    # Algorithmic arithmetic intensity: FLOPs per *ideal* byte moved.
-    # bytes_moved is the minimum traffic (inputs + output, counted once), not
-    # measured DRAM traffic -- a tiled matmul re-reads tiles. Label plots
-    # accordingly.
+    df["gbps"] = df["bytes_moved"] / secs / 1e9
+    # FLOPs per *ideal* byte (inputs + output once), not measured DRAM traffic.
     df["arithmetic_intensity"] = df["flops"] / df["bytes_moved"]
 
-    param_cols = [c for c in df.columns if c.startswith("param_")]
-    df["size_label"] = df[param_cols].apply(
-        lambda r: "x".join(str(int(v)) for v in r), axis=1
+    # Memory roof: best measured copy bandwidth (any dtype: bandwidth is a
+    # property of the GPU). Compute roof: vendor peak of the arithmetic run.
+    df["mem_gbps"] = df["measured_copy_bandwidth_gbps_triton"].map(
+        lambda bw: max(bw.values())  # type: ignore
     )
-    df["problem_size"] = df[param_cols].prod(axis=1)
+    df["peak_tflops"] = [
+        VENDOR_PEAKS[gpu][m] for gpu, m in zip(df["device_name"], df["math"])
+    ]
+    mem_tflops = df["mem_gbps"] * df["arithmetic_intensity"] / 1e3
+    df["bound"] = (mem_tflops < df["peak_tflops"]).map(
+        {True: "memory", False: "compute"}
+    )
+    df["pct_of_ceiling"] = 100 * df["tflops"] / mem_tflops.clip(upper=df["peak_tflops"])
 
+    # Params of *this* op only: frames built from several logs carry other
+    # ops' param columns (e.g. matmul's K next to softmax), all NaN here.
+    all_params = [c for c in df.columns if c.startswith("param_")]
+    params = [c for c in all_params if df[c].notna().all()]
+    df = df.drop(columns=[c for c in all_params if c not in params])
+    df["size_label"] = df[params].apply(
+        lambda r: "x".join(map(str, map(int, r))), axis=1
+    )
+    df["problem_size"] = df[params].prod(axis=1)
     return df
 
 
-def compute_roofs(df: pd.DataFrame, dtype: str, baseline: str) -> Roofs:
-    """Ceilings for one dtype.
+@dataclass(frozen=True)
+class Metric:
+    """The throughput an op is judged in: GB/s when most of its cases are
+    memory-bound, TFLOPS otherwise."""
 
-    Compute roof is the best observed baseline (cuBLAS via torch) throughput:
-    a measured, in-harness number on the same GPU, which beats a synthetic
-    FMA microbenchmark. Memory roof is the measured copy bandwidth.
-    """
-    sub = df[(df["dtype"] == dtype) & (df["status"] == "ok")]
-    if sub.empty:
-        return Roofs(None, None, None, None)
+    column: str
+    unit: str
 
-    copy_bw = sub["measured_copy_bandwidth_gbps_triton"].iloc[0]
-    memory_gbps = copy_bw.get(dtype) if isinstance(copy_bw, dict) else None
-
-    base = sub[sub["impl"] == baseline]
-    compute_tflops = float(base["tflops"].max()) if not base.empty else None
-
-    gpu = sub["device_name"].iloc[0]
-    peaks = VENDOR_PEAKS.get(gpu, {})
-
-    return Roofs(
-        memory_gbps=memory_gbps,
-        compute_tflops=compute_tflops,
-        vendor_bandwidth_gbps=peaks.get("bandwidth_gbps"),
-        vendor_tflops=peaks.get(f"tflops_{dtype}"),
-    )
+    @staticmethod
+    def for_op(df: pd.DataFrame) -> Metric:
+        memory = (df["bound"] == "memory").mean() > 0.5
+        return Metric("gbps", "GB/s") if memory else Metric("tflops", "TFLOPS")
 
 
-# Fixed categorical order (validated light-surface palette); assigned to impls
-# in sorted order so an impl keeps its color across every plot of a report.
-PALETTE = [
-    "#2a78d6",
-    "#eb6834",
-    "#1baf7a",
-    "#eda100",
-    "#e87ba4",
-    "#008300",
-    "#6250d6",
-    "#e34948",
-]
-SYMBOLS = ["circle", "square", "diamond", "triangle", "hexagon", "pentagon", "star"]
-INK = "#52514e"  # reference lines / roofline: text ink, never a series color
-
-WIDTH, HEIGHT = 1000, 520
+def _chrome() -> list[Any]:
+    """Theme + legend shared by every chart."""
+    return [
+        xy.theme(
+            background=SURFACE,
+            plot_background=SURFACE,
+            grid_color=GRID,
+            axis_color=GRID,
+            text_color=TEXT,
+            annotation_text=MUTED,
+            legend_bg=SURFACE,
+        ),
+    ]
 
 
 @dataclass(frozen=True)
@@ -175,33 +184,26 @@ class Style:
     symbol: str
 
 
-def impl_styles(df: pd.DataFrame) -> dict[str, Style]:
-    impls = sorted(df["impl"].unique())
-    return {
+def impl_styles(df: pd.DataFrame, baseline: str) -> dict[str, Style]:
+    impls = [i for i in sorted(df["impl"].unique()) if i != baseline]
+    styles = {
         impl: Style(PALETTE[i % len(PALETTE)], SYMBOLS[i % len(SYMBOLS)])
         for i, impl in enumerate(impls)
     }
+    styles[baseline] = Style(MUTED, "circle")
+    return styles
 
 
 def resolve_baseline(df: pd.DataFrame, baseline: str | None) -> str:
-    """Pick the impl every other one is compared against.
-
-    Records carry the loader's `fn_name` (e.g. `torch_matmul`), not the
-    registry key (`matmul_torch`), so default to the single `torch_*` impl.
-    An unknown baseline is an error: silently comparing against nothing is
-    what made every `pct_of_baseline` NaN.
-    """
+    """The impl every other one is compared against, for one op: `--baseline`
+    if it belongs to this op, else the op's single torch impl."""
     impls = sorted(df["impl"].unique())
-    if baseline is None:
-        torch_impls = [i for i in impls if i.startswith("torch_")]
-        if len(torch_impls) != 1:
-            raise ValueError(
-                f"cannot infer baseline from impls {impls}; pass --baseline"
-            )
-        return torch_impls[0]
-    if baseline not in impls:
-        raise ValueError(f"baseline {baseline!r} not in records; impls: {impls}")
-    return baseline
+    if baseline in impls:
+        return baseline  # type: ignore
+    torch_impls = sorted(df.loc[df["framework"] == "torch", "impl"].unique())
+    if len(torch_impls) != 1:
+        raise ValueError(f"cannot infer baseline from impls {impls}; pass --baseline")
+    return torch_impls[0]
 
 
 def _size_axis(sub: pd.DataFrame) -> tuple[dict[str, int], Any]:
@@ -267,139 +269,145 @@ def _log_axis(axis: Any, values: Any, label: str) -> Any:
     )
 
 
+def quantile_desc(df: pd.DataFrame) -> tuple[str, str]:
+    """(headline, whiskers) labels for the quantiles behind `df`'s times,
+    e.g. ('p50', 'p20-p80')."""
+    sets = df[["q_center", "q_lo", "q_hi"]].drop_duplicates()
+    if len(sets) != 1:
+        return "central quantile", "outer quantiles"
+    c, lo, hi = sets.iloc[0]
+    return qname(c), (f"{qname(lo)}-{qname(hi)}" if lo != hi else "")
+
+
 def _zero_based(*values: Any) -> tuple[float, float]:
     """y domain from 0 to just above the largest data point or reference line."""
-    top = max(float(pd.Series(v).max()) for v in values if v is not None)
+    top = max(float(pd.Series(v).max()) for v in values)
     return 0.0, top * 1.08
 
 
-def _series(x: Any, y: Any, name: str, style: Style, lines: bool = True) -> list[Any]:
+def _series(
+    x: Any, y: Any, name: str, style: Style, lines: bool = True, hollow: Any = None
+) -> list[Any]:
+    """One impl: a smooth line plus markers; `hollow` marks points to draw
+    unfilled (memory-bound cases on the ceiling plot)."""
+    x, y = list(x), list(y)
+    hollow = list(hollow) if hollow is not None else [False] * len(x)
     marks = [
         xy.scatter(
-            list(x),
-            list(y),
-            color=style.color,
+            [a for a, h in zip(x, hollow) if h == fill],
+            [b for b, h in zip(y, hollow) if h == fill],
+            color=SURFACE if fill else style.color,
+            stroke=style.color if fill else SURFACE,
+            stroke_width=2 if fill else 1.5,
             symbol=style.symbol,
-            size=8,
+            size=9,
             opacity=1.0,
             name=None if lines else name,
         )
+        for fill in (False, True)
+        if fill in hollow
     ]
     if lines:
         marks.insert(
-            0, xy.line(list(x), list(y), name=name, color=style.color, width=2)
+            0, xy.line(x, y, name=name, color=style.color, width=2.5, curve="smooth")
         )
     return marks
 
 
-def plot_throughput(
-    df: pd.DataFrame, dtype: str, roofs: Roofs, styles: dict[str, Style]
-) -> xy.Chart:
-    """TFLOPS vs problem size, with ceilings. The headline plot."""
-    sub = df[(df["dtype"] == dtype) & (df["status"] == "ok")]
+def _line_chart(marks: list[Any], x_axis: Any, y_label: str, y_max: Any, title: str):
+    return xy.line_chart(
+        *marks,
+        *_chrome(),
+        x_axis,
+        xy.y_axis(label=y_label, domain=_zero_based(*y_max)),
+        xy.legend(loc="best"),
+        title=title,
+        width=WIDTH,
+        height=HEIGHT,
+    )
+
+
+def plot_throughput(sub: pd.DataFrame, metric: Metric, styles: dict[str, Style]):
+    """Throughput vs problem size, with the ceilings of this unit."""
     pos, x_axis = _size_axis(sub)
+    center, whiskers = quantile_desc(sub)
+    col = metric.column
     marks: list[Any] = []
 
     for impl, g in sub.groupby("impl"):
         g = g.sort_values("problem_size")
         x = g["size_label"].map(pos)
-        hi = g["flops"] / (g["p20_ms"] * 1e-3) / 1e12  # p20 time -> upper TFLOPS
-        lo = g["flops"] / (g["p80_ms"] * 1e-3) / 1e12
-        marks.append(
-            xy.errorbar(
-                list(x),
-                list(g["tflops"]),
-                yerr=(list(g["tflops"] - lo), list(hi - g["tflops"])),
-                color=styles[str(impl)].color,
-                cap_size=0.08,  # data units (ordinal positions), not px
+        if whiskers:  # throughput ~ 1/time
+            hi, lo = (
+                g[col] * g["t_ms"] / g["t_lo_ms"],
+                g[col] * g["t_ms"] / g["t_hi_ms"],
             )
-        )
-        marks += _series(x, g["tflops"], str(impl), styles[str(impl)])
+            marks.append(
+                xy.errorbar(
+                    list(x),
+                    list(g[col]),
+                    yerr=(list(g[col] - lo), list(hi - g[col])),
+                    color=styles[str(impl)].color,
+                    cap_size=0.08,  # data units (ordinal positions), not px
+                    opacity=0.7,
+                )
+            )
+        marks += _series(x, g[col], str(impl), styles[str(impl)])
 
-    if roofs.vendor_tflops:
-        marks.append(
-            xy.hline(
-                roofs.vendor_tflops,
-                text=f"vendor peak ({roofs.vendor_tflops:.0f})",
-                color=INK,
-                width=1,
-            )
-        )
-    if roofs.compute_tflops:
-        marks.append(
-            xy.hline(
-                roofs.compute_tflops,
-                text=f"best observed baseline ({roofs.compute_tflops:.0f})",
-                color=INK,
-                width=1,
-                opacity=0.6,
-            )
-        )
+    if metric.column == "gbps":
+        roofs = {"measured copy bandwidth": sub["mem_gbps"].max()}
+    else:
+        roofs = sub.groupby("math")["peak_tflops"].first()
+        roofs = {f"{m} peak": v for m, v in roofs.items()}
+    for text, v in roofs.items():
+        marks.append(xy.hline(v, text=f"{text} ({v:.0f})", color=MUTED, width=1))
 
-    return xy.line_chart(
-        *marks,
+    return _line_chart(
+        marks,
         x_axis,
-        xy.y_axis(
-            label="TFLOPS (p50, whiskers p20-p80)",
-            domain=_zero_based(
-                sub["flops"] / (sub["p20_ms"] * 1e-3) / 1e12, roofs.vendor_tflops
-            ),
-        ),
-        xy.legend(loc="best"),
-        title=f"Throughput — {dtype}",
-        width=WIDTH,
-        height=HEIGHT,
+        f"{metric.unit} ({center}" + (f", whiskers {whiskers})" if whiskers else ")"),
+        [sub[col] * sub["t_ms"] / sub["t_lo_ms"], *roofs.values()],
+        f"Throughput — {sub['dtype'].iloc[0]}",
     )
 
 
-def plot_pct_of_baseline(
-    df: pd.DataFrame, dtype: str, baseline: str, styles: dict[str, Style]
-) -> xy.Chart:
-    """Each impl as a fraction of the baseline, per size. The scoreboard."""
-    sub = df[(df["dtype"] == dtype) & (df["status"] == "ok")]
+def plot_pct(
+    sub: pd.DataFrame,
+    column: str,
+    ref: str,
+    title: str,
+    styles: dict[str, Style],
+    hollow_memory_bound: bool = False,
+):
+    """Each impl as a percentage of a reference (the baseline, or its own
+    ceiling), per size, with the 100% line labelled `ref`."""
     pos, x_axis = _size_axis(sub)
-    base = sub[sub["impl"] == baseline].set_index("size_label")["tflops"]
-
     marks: list[Any] = []
-    pcts = [100.0]
-    for impl, g in sub.groupby("impl"):
-        if impl == baseline:
-            continue
+    for impl, g in sub.dropna(subset=[column]).groupby("impl"):
         g = g.sort_values("problem_size")
-        pct = 100 * g["tflops"].to_numpy() / g["size_label"].map(base).to_numpy()
-        pcts += list(pct)
-        marks += _series(g["size_label"].map(pos), pct, str(impl), styles[str(impl)])
-
-    marks.append(xy.hline(100, text=baseline, color=INK, width=1))
-    return xy.line_chart(
-        *marks,
-        x_axis,
-        xy.y_axis(label="% of baseline TFLOPS", domain=_zero_based(pcts)),
-        xy.legend(loc="best"),
-        title=f"% of {baseline} — {dtype}",
-        width=WIDTH,
-        height=HEIGHT,
-    )
+        hollow = g["bound"] == "memory" if hollow_memory_bound else None
+        marks += _series(
+            g["size_label"].map(pos),
+            g[column],
+            str(impl),
+            styles[str(impl)],
+            hollow=hollow,
+        )
+    marks.append(xy.hline(100, text=ref, color=MUTED, width=1))
+    return _line_chart(marks, x_axis, f"% of {ref}", [sub[column], 100], title)
 
 
-def plot_roofline(
-    df: pd.DataFrame, dtype: str, roofs: Roofs, styles: dict[str, Style]
-) -> xy.Chart:
-    """Classic roofline: algorithmic intensity vs achieved throughput."""
-    sub = df[(df["dtype"] == dtype) & (df["status"] == "ok")]
+def plot_roofline(sub: pd.DataFrame, styles: dict[str, Style]):
+    """Classic roofline: one roof per arithmetic run, impls as points."""
+    lo = sub["arithmetic_intensity"].min() * 0.5
+    hi = sub["arithmetic_intensity"].max() * 2
+    xs = [lo * (hi / lo) ** (i / 200) for i in range(201)]
+    bw = sub["mem_gbps"].max()
+
     marks: list[Any] = []
-    xs: list[float] = []
-
-    if roofs.memory_gbps and roofs.compute_tflops:
-        # Roof is min(peak_compute, bandwidth * intensity).
-        lo = max(sub["arithmetic_intensity"].min() * 0.5, 1e-2)
-        hi = sub["arithmetic_intensity"].max() * 2
-        xs = [lo * (hi / lo) ** (i / 200) for i in range(201)]
-        ys = [
-            min(roofs.compute_tflops, roofs.memory_gbps * x / 1e3) for x in xs
-        ]  # GB/s * FLOP/byte = GFLOPS -> /1e3 = TFLOPS
-        marks.append(xy.line(xs, ys, name="roofline (measured)", color=INK, width=2))
-
+    for m, peak in sub.groupby("math")["peak_tflops"].first().items():
+        ys = [min(peak, bw * x / 1e3) for x in xs]  # GB/s * FLOP/B / 1e3 = TFLOPS
+        marks.append(xy.line(xs, ys, name=f"roofline ({m})", color=MUTED, width=2))
     for impl, g in sub.groupby("impl"):
         marks += _series(
             g["arithmetic_intensity"],
@@ -411,83 +419,55 @@ def plot_roofline(
 
     return xy.scatter_chart(
         *marks,
+        *_chrome(),
         _log_axis(
             xy.x_axis,
-            [*sub["arithmetic_intensity"], *xs[:1], *xs[-1:]],
+            [lo, hi],
             "algorithmic arithmetic intensity (FLOP / ideal byte)",
         ),
-        _log_axis(xy.y_axis, [*sub["tflops"], roofs.compute_tflops], "TFLOPS"),
+        _log_axis(xy.y_axis, [*sub["tflops"], *sub["peak_tflops"]], "TFLOPS"),
         xy.legend(loc="lower right"),
-        title=f"Roofline — {dtype}",
+        title=f"Roofline — {sub['dtype'].iloc[0]}",
         width=WIDTH,
         height=HEIGHT,
     )
 
 
-def plot_accuracy_speed(df: pd.DataFrame, styles: dict[str, Style]) -> xy.Chart:
-    """Accuracy cost against speed. The part most GEMM posts skip.
-
-    Color/symbol follow the impl as everywhere else; dtype is the fill:
-    the first dtype is solid, the others hollow.
-    """
-    sub = df[df["status"] == "ok"]
-    dtypes = sorted(sub["dtype"].unique())
+def plot_accuracy_speed(df: pd.DataFrame, metric: Metric, styles: dict[str, Style]):
+    """Accuracy cost against speed. Color/symbol follow the impl; the first
+    dtype is solid, the others hollow."""
+    dtypes = sorted(df["dtype"].unique())
     marks: list[Any] = []
-    for (impl, dtype), g in sub.groupby(["impl", "dtype"]):
+    for (impl, dtype), g in df.groupby(["impl", "dtype"]):
         style = styles[str(impl)]
         hollow = dtype != dtypes[0]
         marks.append(
             xy.scatter(
-                list(g["tflops"]),
+                list(g[metric.column]),
                 list(g["max_abs_diff"].clip(lower=1e-8)),
                 name=f"{impl} / {str(dtype).replace('torch.', '')}",
-                color="#ffffff" if hollow else style.color,
-                stroke=style.color if hollow else None,
-                stroke_width=2 if hollow else 0,
+                color=SURFACE if hollow else style.color,
+                stroke=style.color if hollow else SURFACE,
+                stroke_width=2 if hollow else 1.5,
                 symbol=style.symbol,
-                size=9,
+                size=10,
                 opacity=1.0,
             )
         )
     return xy.scatter_chart(
         *marks,
-        xy.x_axis(label="TFLOPS"),
+        *_chrome(),
+        xy.x_axis(label=metric.unit),
         _log_axis(
             xy.y_axis,
-            sub["max_abs_diff"].clip(lower=1e-8),
-            "max abs diff vs fp32 reference",
+            df["max_abs_diff"].clip(lower=1e-8),
+            "max abs diff vs reference",
         ),
         xy.legend(loc="best"),
         title="Accuracy vs throughput",
         width=WIDTH,
         height=HEIGHT,
     )
-
-
-def summary_table(df: pd.DataFrame, baseline: str) -> pd.DataFrame:
-    """One row per (impl, dtype, size) -- what goes in the writeup."""
-    sub = df[df["status"] == "ok"]
-    base = (
-        sub.loc[sub["impl"] == baseline, ["dtype", "size_label", "tflops"]]
-        .drop_duplicates(["dtype", "size_label"])
-        .rename(columns={"tflops": "baseline_tflops"})
-    )
-    out = sub[
-        [
-            "impl",
-            "dtype",
-            "size_label",
-            "problem_size",
-            "p50_ms",
-            "tflops",
-            "max_abs_diff",
-        ]
-    ].merge(base, on=["dtype", "size_label"], how="left")
-    out["pct_of_baseline"] = 100 * out["tflops"] / out["baseline_tflops"]
-    out = out.sort_values(
-        ["dtype", "problem_size", "tflops"], ascending=[True, True, False]
-    )
-    return out.drop(columns=["problem_size", "baseline_tflops"])
 
 
 def write_plots(figs: list[tuple[str, xy.Chart]], out_dir: Path) -> Path:
@@ -506,6 +486,96 @@ def write_plots(figs: list[tuple[str, xy.Chart]], out_dir: Path) -> Path:
     return pdf_path
 
 
+def _op_section(
+    op: str, df: pd.DataFrame, baseline: str | None
+) -> tuple[list[tuple[str, xy.Chart]], pd.DataFrame, str]:
+    """Plots, results table and markdown for one op."""
+    failed = df[df["status"] != "ok"]
+    # Several sweeps of one op can measure the same case (4096^3 is in both
+    # matmul sweeps): keep the newest. Rows arrive in chronological order.
+    df = add_derived(df).drop_duplicates(["impl", "dtype", "size_label"], keep="last")
+    baseline = resolve_baseline(df, baseline)
+    metric = Metric.for_op(df)
+    styles = impl_styles(df, baseline)
+
+    base = df[df["impl"] == baseline].set_index(["dtype", "size_label"])[metric.column]
+    df["pct_of_baseline"] = (
+        100
+        * df[metric.column]
+        / [base.get((d, s)) for d, s in zip(df["dtype"], df["size_label"])]
+    )  # type: ignore
+
+    figs: list[tuple[str, xy.Chart]] = []
+    for dtype, sub in df.groupby("dtype"):
+        short = str(dtype).replace("torch.", "")
+        others = sub[sub["impl"] != baseline]
+        figs += [
+            (f"{op}_throughput_{short}", plot_throughput(sub, metric, styles)),
+            (
+                f"{op}_pct_ceiling_{short}",
+                plot_pct(
+                    sub,
+                    "pct_of_ceiling",
+                    "ceiling",
+                    f"% of ceiling (hollow = memory-bound) — {dtype}",
+                    styles,
+                    hollow_memory_bound=True,
+                ),
+            ),
+            (
+                f"{op}_pct_baseline_{short}",
+                plot_pct(
+                    others,
+                    "pct_of_baseline",
+                    baseline,
+                    f"% of {baseline} {metric.unit} — {dtype}",
+                    styles,
+                ),
+            ),
+            (f"{op}_roofline_{short}", plot_roofline(sub, styles)),
+        ]
+    figs.append((f"{op}_accuracy_speed", plot_accuracy_speed(df, metric, styles)))
+
+    center, whiskers = quantile_desc(df)
+    table = df.sort_values(
+        ["dtype", "problem_size", "pct_of_ceiling"], ascending=[True, True, False]
+    )[
+        [
+            "impl",
+            "dtype",
+            "size_label",
+            "t_ms",
+            metric.column,
+            "pct_of_ceiling",
+            "bound",
+            "pct_of_baseline",
+            "max_abs_diff",
+        ]
+    ].rename(columns={"t_ms": f"{center}_ms"})
+
+    runs = ", ".join(
+        f"{r} ({c})" for r, c in df[["run_id", "cfg_name"]].drop_duplicates().values
+    )
+    md = (
+        f"## {op}\n\n"
+        f"runs: {runs}  \n"
+        f"git: {', '.join(sorted(df['git_commit'].astype(str).unique()))}  \n"
+        f"baseline: {baseline}  \n"
+        f"throughput: {metric.unit} "
+        f"({(df['bound'] == 'memory').mean():.0%} of cases memory-bound)  \n"
+        f"times: {center}" + (f" (spread {whiskers})" if whiskers else "") + "  \n"
+        f"cases: {len(df) + len(failed)} ({len(failed)} not ok)\n\n"
+        "### Results\n\n"
+        + table.to_markdown(index=False, floatfmt=".4g")
+        + "\n\n### Plots\n\n"
+        + "\n\n".join(f"![{name}](plots/{name}.png)" for name, _ in figs)
+    )
+    if not failed.empty:
+        cols = ["impl", "dtype", "status", "error"]
+        md += "\n\n### Not ok\n\n" + failed[cols].to_markdown(index=False)
+    return figs, table.assign(op=op), md
+
+
 def generate_report(
     logs_dir: Path,
     out_dir: Path,
@@ -514,53 +584,29 @@ def generate_report(
     gpu: str | None = None,
     baseline: str | None = None,
 ) -> Path:
-    df = add_derived(load_records(logs_dir, cfg_name, run_id, gpu))
-    baseline = resolve_baseline(df, baseline)
-    styles = impl_styles(df)
+    """One section per op: records of different ops share no params, sizes
+    or baseline, so they are never mixed in one table or plot."""
+    df = load_records(logs_dir, cfg_name, run_id, gpu)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     figs: list[tuple[str, xy.Chart]] = []
-    for dtype in sorted(df["dtype"].unique()):
-        roofs = compute_roofs(df, dtype, baseline)
-        short = dtype.replace("torch.", "")
-        figs += [
-            (f"throughput_{short}", plot_throughput(df, dtype, roofs, styles)),
-            (
-                f"pct_baseline_{short}",
-                plot_pct_of_baseline(df, dtype, baseline, styles),
-            ),
-            (f"roofline_{short}", plot_roofline(df, dtype, roofs, styles)),
-        ]
-    figs.append(("accuracy_speed", plot_accuracy_speed(df, styles)))
+    tables, sections = [], []
+    for op, g in df.groupby("op"):
+        op_figs, table, md = _op_section(str(op), g, baseline)
+        figs += op_figs
+        tables.append(table)
+        sections.append(md)
 
     write_plots(figs, out_dir)
+    table = pd.concat(tables, ignore_index=True)
+    table[["op", *table.columns.drop("op")]].to_csv(
+        out_dir / "summary.csv", index=False
+    )
 
-    table = summary_table(df, baseline)
-    table.to_csv(out_dir / "summary.csv", index=False)
-
-    failed = df[df["status"] != "ok"]
-    plots_md = "\n\n".join(f"![{name}](plots/{name}.png)" for name, _ in figs)
     summary = out_dir / "summary.md"
     summary.write_text(
         f"# {cfg_name or 'all'} — {df['device_name'].iloc[0]}\n\n"
-        f"run_id: {df['run_id'].iloc[0]}  \n"
-        f"git: {df.get('git_commit', pd.Series(['?'])).iloc[0]}  \n"
-        f"baseline: {baseline}  \n"
-        f"cases: {len(df)} ({len(failed)} not ok)  \n"
-        "plots: [report.pdf](report.pdf)\n\n"
-        "## Results\n\n"
-        + table.to_markdown(index=False, floatfmt=".4g")
-        + "\n\n## Plots\n\n"
-        + plots_md
-        + (
-            "\n\n## Not ok\n\n"
-            + failed[["impl", "dtype", "size_label", "status", "error"]].to_markdown(
-                index=False
-            )
-            if not failed.empty
-            else ""
-        )
-        + "\n",
+        "plots: [report.pdf](report.pdf)\n\n" + "\n\n".join(sections) + "\n",
         encoding="utf-8",
     )
     return summary

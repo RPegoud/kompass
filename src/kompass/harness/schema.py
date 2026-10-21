@@ -1,9 +1,5 @@
-"""Plain data flowing through a run: sweep config -> cases -> payload -> results.
-
-Keep this module free of torch/triton imports: `Payload` is pickled to Modal.
-"""
-
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -44,7 +40,10 @@ class Payload:
 
 @dataclass(frozen=True)
 class CaseResult:
-    impl: str
+    op: str  # registry key, e.g. `vec_add`
+    impl: str  # registry key, e.g. `vec_add_triton`
+    framework: Literal["torch", "triton", "cuda"]
+    math: str  # see KernelSpec.math
     params: dict[str, int]
     dtype: str
     seed: int

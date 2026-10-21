@@ -9,6 +9,7 @@ from ...kernels import OpEntry
 class Matmul(Op):
     param_names: tuple[str, ...] = ("M", "N", "K")
     option_names: tuple[str, ...] | None = ("input_precision",)
+    tensor_cores = True
 
     @staticmethod
     def reference(
@@ -88,6 +89,7 @@ matmul_triton_tiled_tf32 = KernelSpec(
         fn_name="matmul_triton_tiled_tf32",
         supports_backward=False,
     ),
+    precision="tf32",
 )
 matmul_triton_tiled_l2_swizzle_ieee = KernelSpec(
     op=Matmul(),
@@ -104,6 +106,7 @@ matmul_triton_tiled_l2_swizzle_tf32 = KernelSpec(
         fn_name="matmul_triton_tiled_l2_swizzle_tf32",
         supports_backward=False,
     ),
+    precision="tf32",
 )
 
 REGISTRY: dict[str, OpEntry] = {

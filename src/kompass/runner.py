@@ -116,7 +116,10 @@ def run_bench(
             status = "skipped_oom"
 
         bench_res = CaseResult(
-            impl=spec.name,
+            op=case.op,
+            impl=case.impl,
+            framework=spec.loader.framework,
+            math=spec.math(dtype),
             params=case.params,
             dtype=str(dtype),
             seed=case.seed,
