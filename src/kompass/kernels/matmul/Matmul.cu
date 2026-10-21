@@ -41,11 +41,20 @@ __global__ void tiledMatmulFwdKernel(float *X, float *Y, float *Z, int Width) {
   int Col = bx * TILE_WIDTH + tx;
 
   float acc = 0.0;
-  for (int b = 0; b < Width / TILE_WIDTH; b++) {
+  for (int b = 0; b < ceil(Width / (float)TILE_WIDTH); b++) {
     // colaboratively load X and Y tiles into shared memory
-    Xds[ty][tx] = X[Row * Width + b * TILE_WIDTH + tx];
-    Yds[ty][tx] = Y[Col + (b * TILE_WIDTH + ty) * Width];
-    __syncthreads(); // wait until all threads have loaded the tiles
+    if ((Row < Width) && (b * TILE_WIDTH + tx) < Width)
+      Xds[ty][tx] = X[Row * Width + b * TILE_WIDTH + tx];
+    else
+      Xds[ty][tx] = 0.0f;
+
+    if ((b * TILE_WIDTH + ty) < Width && Col < Width)
+      Yds[ty][tx] = Y[Col + (b * TILE_WIDTH + ty) * Width];
+    else
+      Yds[ty][tx] = 0.0f;
+
+    // wait until all threads have loaded the tiles
+    __syncthreads();
 
     // accumulate dot products over the current tile
     // along the K dimension
@@ -54,13 +63,14 @@ __global__ void tiledMatmulFwdKernel(float *X, float *Y, float *Z, int Width) {
     }
     __syncthreads(); // wait until all threads have finished using the tile
   }
-  Z[Row * Width + Col] = acc;
+  if ((Row < Width) && (Col < Width))
+    Z[Row * Width + Col] = acc;
 }
 
 at::Tensor tiled_matmul_fwd(const at::Tensor &X, const at::Tensor &Y) {
   // TODO: remove the square matrix constraint
   // TODO: implement register tiling
-  
+
   check_matmul_inputs(X, Y);
   const at::cuda::CUDAGuard guard(X.device());
 
@@ -75,8 +85,8 @@ at::Tensor tiled_matmul_fwd(const at::Tensor &X, const at::Tensor &Y) {
   tiledMatmulFwdKernel<<<n_blocks, threads_per_block>>>(
       X.data_ptr<float>(), Y.data_ptr<float>(), Z.data_ptr<float>(), Width);
 
-  CUDA_CHECK(
-      cudaGetLastError()); // catch config errors (e.g. invalid block size)
+  CUDA_CHECK(cudaGetLastError()); // catch config errors (e.g. invalid
+                                  // block size)
 
   return Z;
 }

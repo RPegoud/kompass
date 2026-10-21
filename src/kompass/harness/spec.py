@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .loaders import Loader
 from .ops import CompareResult, Op
@@ -19,11 +19,24 @@ class TestResults:
 
 
 class KernelSpec:
-    def __init__(self, op: Op, loader: Loader) -> None:
+    def __init__(
+        self, op: Op, loader: Loader, precision: Literal["ieee", "tf32"] = "ieee"
+    ) -> None:
         self.op = op
         self.loader = loader
+        self.precision = precision  # how float32 inputs are multiplied
         self.name = self.loader.fn_name
         self._kernel = None
+
+    def math(self, dtype: torch.dtype) -> str:
+        """The arithmetic this kernel runs on `dtype`, which sets its compute
+        ceiling: tensor-core ops run narrow dtypes natively and float32 as
+        tf32 when allowed; other ops compute in float32 on CUDA cores."""
+        if not self.op.tensor_cores:
+            return "float32"
+        if str(dtype) == "torch.float32":
+            return "tf32" if self.precision == "tf32" else "float32"
+        return str(dtype).removeprefix("torch.")
 
     @property
     def kernel(self) -> Callable:

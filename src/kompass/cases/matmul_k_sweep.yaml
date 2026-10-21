@@ -1,5 +1,12 @@
 op: matmul
-impls: [matmul_triton_tiled_ieee, matmul_triton_tiled_tf32, matmul_torch]
+impls:
+  [
+    matmul_triton_tiled_ieee,
+    matmul_triton_tiled_tf32,
+    matmul_triton_tiled_l2_swizzle_ieee,
+    matmul_triton_tiled_l2_swizzle_tf32,
+    matmul_torch,
+  ]
 axes:
   M: [4096]
   N: [64, 128, 256, 512, 1024, 2048, 4096, 8192]

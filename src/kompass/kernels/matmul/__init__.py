@@ -9,6 +9,7 @@ from ...kernels import OpEntry
 class Matmul(Op):
     param_names: tuple[str, ...] = ("M", "N", "K")
     option_names: tuple[str, ...] | None = ("input_precision",)
+    tensor_cores = True
 
     @staticmethod
     def reference(
@@ -88,9 +89,25 @@ matmul_triton_tiled_tf32 = KernelSpec(
         fn_name="matmul_triton_tiled_tf32",
         supports_backward=False,
     ),
+    precision="tf32",
 )
-
-# matmul_cuda_naive = MatmulSpec(loader=CudaLoader(...))
+matmul_triton_tiled_l2_swizzle_ieee = KernelSpec(
+    op=Matmul(),
+    loader=TritonLoader(
+        module_path=f"{__package__}.matmul",
+        fn_name="matmul_triton_tiled_l2_swizzle_ieee",
+        supports_backward=False,
+    ),
+)
+matmul_triton_tiled_l2_swizzle_tf32 = KernelSpec(
+    op=Matmul(),
+    loader=TritonLoader(
+        module_path=f"{__package__}.matmul",
+        fn_name="matmul_triton_tiled_l2_swizzle_tf32",
+        supports_backward=False,
+    ),
+    precision="tf32",
+)
 
 REGISTRY: dict[str, OpEntry] = {
     "matmul": OpEntry(
@@ -98,6 +115,8 @@ REGISTRY: dict[str, OpEntry] = {
         impls={
             "matmul_triton_tiled_ieee": matmul_triton_tiled_ieee,
             "matmul_triton_tiled_tf32": matmul_triton_tiled_tf32,
+            "matmul_triton_tiled_l2_swizzle_ieee": matmul_triton_tiled_l2_swizzle_ieee,
+            "matmul_triton_tiled_l2_swizzle_tf32": matmul_triton_tiled_l2_swizzle_tf32,
             "matmul_torch": matmul_torch,
         },
     )

@@ -4,12 +4,13 @@ import os
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 import torch
 
 
 class Loader(Protocol):
+    framework: Literal["torch", "triton", "cuda"]
     fn_name: str
     supports_backward: bool
 
@@ -19,8 +20,9 @@ class Loader(Protocol):
 
 class TorchLoader(Loader):
     def __init__(self, fn: Callable, options: dict[str, int | str] | None = None):
-        self.fn_name = f"torch_{fn.__name__}"
+        self.fn_name = f"torch.{fn.__name__}"
         self.supports_backward = True
+        self.framework = "torch"
         if options:
             self.fn = partial(fn, **options)
         else:
@@ -40,7 +42,7 @@ class TritonLoader(Loader):
         self.module_path = module_path
         self.fn_name = fn_name
         self.supports_backward = supports_backward
-        self.backend = "triton"
+        self.framework = "triton"
         self.module = None
 
     @staticmethod
@@ -73,7 +75,7 @@ class CudaLoader(Loader):
         self.fn_name = fn_name
         self.sources = sources
         self.supports_backward = supports_backward
-        self.backend = "cuda"
+        self.framework = "cuda"
         self.module = None
 
     def load(self) -> Callable:

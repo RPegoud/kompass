@@ -27,15 +27,19 @@ After `uv sync`, all endpoints are available through the `kompass` entry point.
 | Command | What it does |
 | --- | --- |
 | `kompass list` | Prints every registered Op and its implementations. |
-| `kompass bench <cases/*.yaml> [--backend local\|modal:<gpu>] [--device cuda:0]` | Runs a sweep: every `impl × dtype × param` combination in the YAML is checked for correctness, then timed with `triton.testing.do_bench`. |
+| `kompass bench <cases/*.yaml> [--backend local\|modal:<gpu>] [--device cuda:0]` | Runs a sweep: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. |
 | `kompass profile <op>/<impl> -p K=V [-p K=V ...] [--dtype float32] [--set full\|roofline\|detailed]` | Profiles one case under `ncu`, then ingests the report automatically. |
 | `kompass ingest <reports/.../report.ncu-rep>` | Parses an existing Nsight Compute report into `records.jsonl` (`profile` calls this for you). |
+| `kompass report [--cfg <name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<cfg>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. One section per op; each op's baseline defaults to its `torch` impl. |
 
 ### 💡 Examples
 
 ```bash
 # What's available?
 kompass list
+
+# What are the 10 most recent logs for experiment `matmul_k_sweep`?  
+kompass runs --op "matmul" --cfg "matmul_k_sweep" --n 10
 
 # Benchmark vec_add on the local GPU
 kompass bench src/kompass/cases/vec_add_sweep.yaml
@@ -54,10 +58,13 @@ kompass profile vec_add/triton -p N=16777216 --dtype float32 --set full
 ### 📂 Outputs
 
 ```
-logs/<timestamp>_<run_id>/
+logs/<timestamp>__<op>__<run_id>/   # bench
 ├── meta.json        # run config, GPU/driver/nvcc info, measured copy bandwidth, git commit
-├── times.jsonl      # bench: one row per case (times at each quantile, flops, bytes, status, memory)
-└── records.jsonl    # profile: one row per kernel launch (duration, DRAM bytes, %DRAM / %SM of peak)
+└── times.jsonl      # one row per case (times at each quantile, flops, bytes, status, memory)
+
+logs/<timestamp>__<op>__<uid>/      # profile (ingest)
+├── meta.json
+└── records.jsonl    # one row per kernel launch (duration, DRAM bytes, %DRAM / %SM of peak)
 
 reports/<op>_<impl>/<uid>/
 ├── meta.json
@@ -80,8 +87,6 @@ one-liner, e.g. `pd.read_json("logs/.../times.jsonl", lines=True)`.
 ├── .devcontainer/              # VS Code devcontainer (bind-mounts repo, caches uv/ccache/torch ext)
 ├── example.env                 # template for .env (Modal credentials)
 ├── pyproject.toml / uv.lock
-├── roofline.ipynb              # roofline plots from Op flops/bytes + measured results
-├── vec_add_vis.ipynb           # vec_add benchmark visualisation
 ├── logs/                       # bench / profile records (generated)
 ├── reports/                    # ncu reports (generated)
 └── src/kompass/
@@ -101,13 +106,14 @@ one-liner, e.g. `pd.read_json("logs/.../times.jsonl", lines=True)`.
     │   ├── vec_add_sweep.yaml
     │   ├── softmax_occupancy.yaml
     │   ├── softmax_rowlen.yaml
-    │   └── matmul_sweep.yaml
+    │   ├── matmul_k_sweep.yaml
+    │   └── matmul_square.yaml
     └── kernels/
         ├── __init__.py         # global REGISTRY (merges every Op's registry)
         ├── common.cuh          # CUDA_CHECK / CUDA_CHECK_LAUNCH macros
-        ├── vec_add/            # VecAdd Op + CUDA, Triton, Torch impls
-        ├── softmax/            # Softmax Op + Triton (single-block, online), Torch impls
-        └── matmul/             # Matmul Op + Triton (tiled), Torch impls
+        ├── <op_name>/
+            └── <op_name>.cu    # define CUDA kernels here
+            └── <op_name>.py    # define Triton kernels here
 ```
 
 ---
@@ -179,7 +185,7 @@ The Op is the contract that every implementation is tested and measured against:
 ```python
 # kernels/vec_add/__init__.py
 class VecAdd(Op):
-    param_names: tuple[str, ...] = ("N",)   # must match the axes in the sweep YAML
+    param_names: tuple[str, ...] = ("N",)   # keys used in the sweep YAML's `axes` / `shapes`
 
     @staticmethod
     def reference(*tensors, params=None) -> torch.Tensor:
@@ -323,16 +329,44 @@ for r in [_vec_add, ..., _my_op]:
 
 ### 🧪 4. Describe a sweep
 
+A sweep YAML names the Op, the impls and dtypes to compare, and the parameter sets to run.
+Kompass runs every `impl × dtype × parameter set` combination. You define the parameter sets
+in one of two ways, and a config must use exactly one of them:
+
+- **`axes`** gives one list of values per parameter. Kompass runs the **Cartesian product** of the lists.
+  Use it for scans, e.g. sweeping `N` for `vec_add`, or sweeping `K` with `M` and `N` fixed for `matmul`.
+- **`shapes`** gives an **explicit list** of parameter combinations. Only those are run. Use it when
+  parameters move together (e.g. square matmuls), so the full grid would be mostly irrelevant cases.
+
+Every parameter set must define exactly the Op's `param_names`. Otherwise `bench` exits with an error.
+
 ```yaml
-# src/kompass/cases/vec_add_sweep.yaml
-op: vec_add
-impls: [vec_add_cuda, vec_add_triton, vec_add_torch]
-axes:
-  N: [1024, 1048576, 268435456]   # one list per entry in Op.param_names
-  dtypes: [float32]
+# src/kompass/cases/softmax_occupancy.yaml (grid via `axes`)
+op: softmax
+impls: [softmax_triton_online, softmax_torch]
+axes:  # one list per entry in Op.param_names
+  M: [1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 4096, 16384] 
+  N: [4096]
+dtypes: [float32]
 seed: 0
-quantiles: [0.2, 0.5, 0.8]        # passed to do_bench
+quantiles: [0.2, 0.5, 0.8] # passed to do_bench
 ```
+
+```yaml
+# src/kompass/cases/matmul_square.yaml (explicit combinations via `shapes`)
+op: matmul
+impls: [matmul_triton_tiled_ieee, matmul_triton_tiled_tf32, matmul_torch]
+shapes:
+  - { M: 1024, N: 1024, K: 1024 }
+  - { M: 4096, N: 4096, K: 4096 }
+  - { M: 8192, N: 8192, K: 8192 }
+dtypes: [float32, bfloat16]
+seed: 0
+quantiles: [0.2, 0.5, 0.8]
+```
+
+With `axes: {M: [1024, 4096], N: [1024, 4096], K: [1024, 4096]}` you would get 8 shapes.
+The `shapes` list above runs only the 3 square ones.
 
 ### 🚀 5. Run it
 
@@ -353,8 +387,6 @@ kompass profile vec_add/cuda -p N=16777216                # Nsight Compute deep 
   and Modal keeps them on the `cuda_kernels` and `triton_kernels` volumes.
 - **Autograd.** Set `supports_backward=True` on a loader to have `make_inputs` create tensors
   with `requires_grad=True`.
-- **Roofline.** `meta.json` records the copy bandwidth measured with Triton on the target GPU.
-  Plot achieved GB/s (`bytes_moved / time`) against it, or use [oofline.ipynb](roofline.ipynb).
 
 ## 🗺️ Roadmap
 
