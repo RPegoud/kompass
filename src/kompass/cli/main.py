@@ -34,8 +34,9 @@ def runs(
     op: Annotated[
         str | None, typer.Option(help="Op to filter for, e.g. `matmul`")
     ] = None,
-    cfg: Annotated[
-        str | None, typer.Option(help="Config to filter for, e.g. `matmul_k_sweep`")
+    config_name: Annotated[
+        str | None,
+        typer.Option("--config", help="Config to filter for, e.g. `matmul_k_sweep`"),
     ] = None,
     n: Annotated[int, typer.Option(help="Maximum number of logs to show")] = 20,
 ):
@@ -70,7 +71,7 @@ def runs(
         with open(str(logs_dir / log / "meta.json"), "r") as f:
             meta = json.load(f)
             cfg_name = meta.get("cfg_name", "-")  # profile runs have no sweep config
-        if cfg and cfg != cfg_name:
+        if config_name and config_name != cfg_name:
             continue
 
         table.add_row(log, ts, uid, op_name, cfg_name)
@@ -83,7 +84,12 @@ def runs(
 
 @app.command()
 def bench(
-    sweep_cfg: Annotated[str, typer.Argument(help="Path to cases/*.yaml")],
+    config_name: Annotated[
+        str,
+        typer.Argument(
+            help="The configuration name, as defined in `src/kompass/cases/*.yaml`, e.g. `vec_add_sweep`."
+        ),
+    ],
     backend: Annotated[
         str, typer.Option(help="Either `local` or `modal:gpu`, e.g. `modal:h100`")
     ] = "local",
@@ -123,16 +129,22 @@ def bench(
     run_id = uuid.uuid4().hex[:8]
     timestamp = get_timestamp()
 
-    raw = OmegaConf.to_container(OmegaConf.load(sweep_cfg), resolve=True)
+    cases_dir = Path(__file__).resolve().parents[1] / "cases"
+    sweep_path = cases_dir / f"{config_name}.yaml"
+    if not sweep_path.is_file():
+        available = sorted(p.stem for p in cases_dir.glob("*.yaml"))
+        raise typer.BadParameter(
+            f"Unknown config `{config_name}`, expected one of {available}"
+        )
+
+    raw = OmegaConf.to_container(OmegaConf.load(sweep_path), resolve=True)
     if not isinstance(raw, dict):
         raise typer.BadParameter(
-            f"{sweep_cfg} must contain a mapping, got {type(raw).__name__}"
+            f"{sweep_path} must contain a mapping, got {type(raw).__name__}"
         )
     cfg = SweepConfig(run_id=run_id, **{str(k): v for (k, v) in raw.items()})
     op: Op = REGISTRY[cfg.op].op
 
-    sweep_path = Path(sweep_cfg)
-    cfg_name = sweep_path.stem
     output_dir = repo_root() / "logs" / f"{timestamp}__{op.name}__{run_id}"
     output_dir.mkdir(parents=True, exist_ok=True)
     meta_file = output_dir / "meta.json"
@@ -200,7 +212,7 @@ def bench(
         raise
     finally:
         meta |= {
-            "cfg_name": cfg_name,
+            "cfg_name": config_name,
             "kind": "bench",
             "run_id": run_id,
             "timestamp": timestamp,
@@ -212,7 +224,7 @@ def bench(
                 row[f"param_{p_name}"] = p_value
             row |= env
             row |= {
-                "cfg_name": cfg_name,
+                "cfg_name": config_name,
                 "run_id": run_id,
                 "kind": "bench",
                 "measured_copy_bandwidth_gbps_triton": meta[
@@ -377,7 +389,13 @@ def profile(
 
 @app.command()
 def report(
-    cfg_name: Annotated[str | None, typer.Option("--cfg")] = None,
+    config_name: Annotated[
+        str | None,
+        typer.Option(
+            "--config",
+            help="The configuration name, as defined in `src/kompass/cases/*.yaml`, e.g. `vec_add_sweep`.",
+        ),
+    ] = None,
     run_id: Annotated[str | None, typer.Option("--run-id")] = None,
     gpu: Annotated[str | None, typer.Option("--gpu")] = None,
     baseline: Annotated[
@@ -395,8 +413,8 @@ def report(
     root = repo_root()
     summary = generate_report(
         logs_dir=root / "logs",
-        out_dir=root / out / (cfg_name or "all"),
-        cfg_name=cfg_name,
+        out_dir=root / out / (config_name or "all"),
+        cfg_name=config_name,
         run_id=run_id,
         gpu=gpu,
         baseline=baseline,

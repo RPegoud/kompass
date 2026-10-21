@@ -27,10 +27,10 @@ After `uv sync`, all endpoints are available through the `kompass` entry point.
 | Command | What it does |
 | --- | --- |
 | `kompass list` | Prints every registered Op and its implementations. |
-| `kompass bench <cases/*.yaml> [--backend local\|modal:<gpu>] [--device cuda:0]` | Runs a sweep: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. |
+| `kompass bench <config_name> [--backend local\|modal:<gpu>] [--device cuda:0]` | Runs a sweep: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. |
 | `kompass profile <op>/<impl> -p K=V [-p K=V ...] [--dtype float32] [--set full\|roofline\|detailed]` | Profiles one case under `ncu`, then ingests the report automatically. |
 | `kompass ingest <reports/.../report.ncu-rep>` | Parses an existing Nsight Compute report into `records.jsonl` (`profile` calls this for you). |
-| `kompass report [--cfg <name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<cfg>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. One section per op; each op's baseline defaults to its `torch` impl. |
+| `kompass report [--config <config_name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<config_name>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. One section per op; each op's baseline defaults to its `torch` impl. |
 
 ### 💡 Examples
 
@@ -39,13 +39,13 @@ After `uv sync`, all endpoints are available through the `kompass` entry point.
 kompass list
 
 # What are the 10 most recent logs for experiment `matmul_k_sweep`?  
-kompass runs --op "matmul" --cfg "matmul_k_sweep" --n 10
+kompass runs --op "matmul" --config "matmul_k_sweep" --n 10
 
 # Benchmark vec_add on the local GPU
-kompass bench src/kompass/cases/vec_add_sweep.yaml
+kompass bench vec_add_sweep
 
 # Same sweep on a Modal H100
-kompass bench src/kompass/cases/vec_add_sweep.yaml --backend modal:h100
+kompass bench vec_add_sweep --backend modal:h100
 
 # Profile a single case. The key is <op>/<impl suffix>: `vec_add/triton` -> `vec_add_triton`
 kompass profile vec_add/triton -p N=16777216 --dtype float32 --set full
@@ -153,7 +153,7 @@ You need `nvcc` on `PATH` for CUDA kernels and `ncu` for profiling.
 modal token set --token-id $MODAL_TOKEN_ID --token-secret $MODAL_TOKEN_SECRET
 modal volume create cuda_kernels     # caches compiled CUDA extensions
 modal volume create triton_kernels   # caches Triton compilations
-kompass bench src/kompass/cases/vec_add_sweep.yaml --backend modal:t4
+kompass bench vec_add_sweep --backend modal:t4
 ```
 
 The Modal image is built from the same `Dockerfile`, so local and remote runs share one
@@ -372,7 +372,7 @@ The `shapes` list above runs only the 3 square ones.
 
 ```bash
 kompass list                                              # the new impls should be listed
-kompass bench src/kompass/cases/vec_add_sweep.yaml        # correctness-gated benchmark
+kompass bench vec_add_sweep        # correctness-gated benchmark
 kompass profile vec_add/cuda -p N=16777216                # Nsight Compute deep dive
 ```
 
