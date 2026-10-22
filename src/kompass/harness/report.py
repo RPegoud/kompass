@@ -23,10 +23,128 @@ import xy
 from pypdf import PdfWriter
 from xy.facets import FacetGrid
 
-# Dense vendor peaks in TFLOPS, keyed by the record's `math` (KernelSpec.math).
-# H100 SXM5: float32 on CUDA cores; tf32 / bfloat16 on tensor cores.
+# Dense vendor peaks in TFLOPS, keyed by the record's `device_name` (as torch
+# and nvidia-smi report it; keys checked with a Modal probe on 2026-10-22) and
+# `math` (KernelSpec.math). Sparse datasheet figures are halved.
 VENDOR_PEAKS: dict[str, dict[str, float]] = {
-    "NVIDIA H100 80GB HBM3": {"float32": 67.0, "tf32": 494.5, "bfloat16": 989.4},
+    # --- Turing (sm_75) -------------------------------------------------
+    # modal gpu="T4". No TF32, no BF16: both postdate Turing. A bf16 benchmark
+    # here is emulated, not native -- treat such numbers with suspicion.
+    # Source: NVIDIA T4 datasheet (8.1 TFLOPS FP32, 65 TFLOPS FP16 tensor).
+    "Tesla T4": {
+        "float32": 8.1,
+        "float16": 65.0,  # tensor core, dense
+    },
+    # --- Ampere (sm_80 / sm_86) ----------------------------------------
+    # modal gpu="A100-40GB". Modal may serve the 80GB part for this request
+    # (the probe got one), so check `device_name` in the records.
+    # Source: NVIDIA A100 datasheet; TF32 312 and BF16 624 are quoted WITH
+    # sparsity, halved here.
+    "NVIDIA A100-SXM4-40GB": {
+        "float32": 19.5,
+        "tf32": 156.0,
+        "bfloat16": 312.0,
+        "float16": 312.0,
+    },
+    # modal gpu="A100-80GB". Same compute as the 40GB part; only HBM differs
+    # (1555 -> 2039 GB/s).
+    "NVIDIA A100-SXM4-80GB": {
+        "float32": 19.5,
+        "tf32": 156.0,
+        "bfloat16": 312.0,
+        "float16": 312.0,
+    },
+    # modal gpu="A10": the datacenter A10, not the AWS A10G.
+    # Source: NVIDIA A10 datasheet; tensor figures quoted with sparsity, halved.
+    "NVIDIA A10": {
+        "float32": 31.2,
+        "tf32": 62.5,
+        "bfloat16": 125.0,
+        "float16": 125.0,
+    },
+    # --- Ada Lovelace (sm_89) ------------------------------------------
+    # modal gpu="L4".
+    # Source: NVIDIA L4 datasheet via Cisco UCS collateral. TF32 120 and BF16
+    # 242 are quoted with sparsity ("1/2 lower without sparsity"), halved here.
+    "NVIDIA L4": {
+        "float32": 30.3,
+        "tf32": 60.0,
+        "bfloat16": 121.0,
+        "float16": 121.0,
+    },
+    # modal gpu="L40S".
+    # Source: NVIDIA L40S datasheet (PNY). Dense values given directly:
+    # TF32 183 dense / 366 sparse, BF16 362.05 dense / 733 sparse.
+    "NVIDIA L40S": {
+        "float32": 91.6,
+        "tf32": 183.0,
+        "bfloat16": 362.05,
+        "float16": 362.05,
+    },
+    # --- Hopper (sm_90) -------------------------------------------------
+    # modal gpu="H100!" (plain "H100" may be upgraded to an H200).
+    # Source: NVIDIA H100 datasheet, SXM5. Sparse figures halved.
+    "NVIDIA H100 80GB HBM3": {
+        "float32": 67.0,
+        "tf32": 494.5,
+        "bfloat16": 989.4,
+        "float16": 989.4,
+        "float8": 1978.9,
+    },
+    # modal gpu="H200". Same GH100 die as H100 SXM, so identical compute;
+    # only memory differs (80GB HBM3 @ 3.35 TB/s -> 141GB HBM3e @ 4.8 TB/s).
+    "NVIDIA H200": {
+        "float32": 67.0,
+        "tf32": 494.5,
+        "bfloat16": 989.4,
+        "float16": 989.4,
+        "float8": 1978.9,
+    },
+    # --- Blackwell (sm_100 / sm_103 / sm_120) ---------------------------
+    # modal gpu="B200" / "B300".
+    # Sources agree on dense BF16 2250 and TF32 ~1100-1125, but DISAGREE on
+    # FP32: flopper.io says 75 dense, verda/datacrunch says 37. That is a
+    # factor of 2 (likely dual-issue FP32 counted or not). The conservative
+    # value is used; do not quote the fp32 line without checking it against a
+    # measurement.
+    "NVIDIA B200": {
+        "float32": 37.0,  # CONFLICTED: 37 vs 75 across sources
+        "tf32": 1100.0,
+        "bfloat16": 2250.0,
+        "float16": 2250.0,
+        "float8": 4500.0,
+    },
+    "NVIDIA B300 SXM6 AC": {
+        "float32": 37.0,  # CONFLICTED, as above
+        "tf32": 1100.0,
+        "bfloat16": 2250.0,
+        "float16": 2250.0,
+        "float8": 4500.0,
+    },
+    # modal gpu="RTX-PRO-6000". The official datasheet quotes only FP32 and
+    # peak FP4; it lists no TF32 or BF16 tensor figure, so those keys are
+    # deliberately absent rather than guessed.
+    # Source: NVIDIA RTX PRO 6000 Blackwell Server Edition datasheet.
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition": {
+        "float32": 120.0,
+    },
+}
+
+# GB/s. Kept separate from the TFLOPS table so the units can't be confused --
+# the roofline multiplies one by arithmetic intensity and compares to the other.
+# Shown next to the measured copy bandwidth, which remains the memory roof.
+VENDOR_BANDWIDTH_GBPS: dict[str, float] = {
+    "Tesla T4": 320.0,  # GDDR6
+    "NVIDIA A100-SXM4-40GB": 1555.0,  # HBM2
+    "NVIDIA A100-SXM4-80GB": 2039.0,  # HBM2e
+    "NVIDIA A10": 600.0,  # GDDR6
+    "NVIDIA L4": 300.0,  # GDDR6
+    "NVIDIA L40S": 864.0,  # GDDR6
+    "NVIDIA H100 80GB HBM3": 3350.0,  # HBM3
+    "NVIDIA H200": 4800.0,  # HBM3e
+    "NVIDIA B200": 7700.0,  # HBM3e; some sources say 8000
+    "NVIDIA B300 SXM6 AC": 8000.0,  # HBM3e; conflicts with 7700 elsewhere
+    "NVIDIA RTX PRO 6000 Blackwell Server Edition": 1597.0,  # GDDR7
 }
 
 SURFACE = "#FEFEFE"
@@ -108,6 +226,15 @@ def _time_stats(times: list[float], qs: list[float]) -> dict[str, float]:
     }
 
 
+def _peak(gpu: str, math: str) -> float:
+    if math not in VENDOR_PEAKS.get(gpu, {}):
+        raise ValueError(
+            f"no vendor peak for {math!r} on {gpu!r}: add it to VENDOR_PEAKS in "
+            "harness/report.py"
+        )
+    return VENDOR_PEAKS[gpu][math]
+
+
 def add_derived(df: pd.DataFrame) -> pd.DataFrame:
     """Throughputs, sizes and the per-case ceiling, for the ok rows of one op."""
     df = df[df["status"] == "ok"].copy()
@@ -129,9 +256,7 @@ def add_derived(df: pd.DataFrame) -> pd.DataFrame:
     df["mem_gbps"] = df["measured_copy_bandwidth_gbps_triton"].map(
         lambda bw: max(bw.values())  # type: ignore
     )
-    df["peak_tflops"] = [
-        VENDOR_PEAKS[gpu][m] for gpu, m in zip(df["device_name"], df["math"])
-    ]
+    df["peak_tflops"] = [_peak(gpu, m) for gpu, m in zip(df["device_name"], df["math"])]
     mem_tflops = df["mem_gbps"] * df["arithmetic_intensity"] / 1e3
     df["bound"] = (mem_tflops < df["peak_tflops"]).map(
         {True: "memory", False: "compute"}
@@ -184,6 +309,10 @@ class Style:
     color: str
     symbol: str
 
+    @property
+    def size(self) -> float:
+        return 12 if self.symbol == "triangle" else 9  # triangles render smaller
+
 
 def impl_styles(df: pd.DataFrame, baseline: str) -> dict[str, Style]:
     impls = [i for i in sorted(df["impl"].unique()) if i != baseline]
@@ -207,6 +336,13 @@ def resolve_baseline(df: pd.DataFrame, baseline: str | None) -> str:
     return torch_impls[0]
 
 
+def _varying_params(sub: pd.DataFrame) -> tuple[list[str], list[str]]:
+    """(varying, fixed) `param_*` columns of `sub`; all of them vary if none do."""
+    params = [c for c in sub.columns if c.startswith("param_") and sub[c].notna().any()]
+    varying = [c for c in params if sub[c].nunique() > 1] or params
+    return varying, [c for c in params if c not in varying]
+
+
 def _size_axis(sub: pd.DataFrame) -> tuple[dict[str, int], Any]:
     """Ordinal x positions for problem sizes, ordered by size (not by string),
     plus the matching x axis. Ordinal rather than categorical so every series
@@ -215,9 +351,7 @@ def _size_axis(sub: pd.DataFrame) -> tuple[dict[str, int], Any]:
     Ticks show only the params that vary (e.g. `N` in a K-sweep); the fixed
     ones go in the axis title.
     """
-    params = [c for c in sub.columns if c.startswith("param_") and sub[c].notna().any()]
-    varying = [c for c in params if sub[c].nunique() > 1] or params
-    fixed = [c for c in params if c not in varying]
+    varying, fixed = _varying_params(sub)
 
     sizes = sub.drop_duplicates("size_label").sort_values(
         ["problem_size", "size_label"]
@@ -246,9 +380,12 @@ def _size_axis(sub: pd.DataFrame) -> tuple[dict[str, int], Any]:
     return pos, axis
 
 
-def _log_axis(axis: Any, values: Any, label: str) -> Any:
+def _log_axis(
+    axis: Any, values: Any, label: str, extra: dict[float, str] | None = None
+) -> Any:
     """Log axis with 1-2-5 ticks over the data range (xy labels only decades
-    by default, which leaves a 1.5-decade roofline with one tick)."""
+    by default, which leaves a 1.5-decade roofline with one tick). `extra`
+    adds labelled ticks, e.g. {1e-9: "exact"}."""
     v = pd.Series(values).dropna()
     v = v[v > 0]
     lo, hi = float(v.min()) / 1.5, float(v.max()) * 1.5
@@ -261,12 +398,13 @@ def _log_axis(axis: Any, values: Any, label: str) -> Any:
     ]
     if len(ticks) > 10:  # many decades: decades only
         ticks = [t for t in ticks if f"{t:.0e}".startswith("1")]
+    labels = {t: f"{t:g}" for t in ticks} | (extra or {})
     return axis(
         label=label,
         type_="log",
         domain=(lo, hi),
-        tick_values=ticks,
-        tick_labels=[f"{t:g}" for t in ticks],
+        tick_values=list(labels),
+        tick_labels=list(labels.values()),
     )
 
 
@@ -301,7 +439,7 @@ def _series(
             stroke=style.color if fill else SURFACE,
             stroke_width=2 if fill else 1.5,
             symbol=style.symbol,
-            size=9,
+            size=style.size,
             opacity=1.0,
             name=None if lines else name,
         )
@@ -367,7 +505,11 @@ def plot_throughput(
 
     def roofs(rows: pd.DataFrame) -> dict[str, Any]:
         if metric.column == "gbps":
-            return {"measured copy bandwidth": rows["mem_gbps"].max()}
+            gpu = rows["device_name"].iloc[0]
+            bw = {"measured copy bandwidth": rows["mem_gbps"].max()}
+            if gpu in VENDOR_BANDWIDTH_GBPS:
+                bw["vendor bandwidth"] = VENDOR_BANDWIDTH_GBPS[gpu]
+            return bw
         peaks = rows.groupby("math")["peak_tflops"].first()
         return {f"{m} peak": v for m, v in peaks.items()}
 
@@ -434,6 +576,24 @@ def plot_roofline(
             styles[str(impl)],
             lines=False,
         )
+    # Name sizes (varying params only) above their highest point, skipping any
+    # closer than 4% of the axis to the last label: intensity flattens at large
+    # sizes, and sizes can share one intensity entirely (e.g. softmax).
+    varying, _ = _varying_params(scope)
+    tops = sub.groupby("size_label").agg(
+        x=("arithmetic_intensity", "first"),
+        y=("tflops", "max"),
+        **{c: (c, "first") for c in varying},
+    )
+    last = -math.inf
+    for r in sorted(tops.to_dict("records"), key=lambda r: r["x"]):  # type: ignore
+        if math.log10(r["x"]) - last < 0.04 * math.log10(hi / lo):
+            continue
+        last = math.log10(r["x"])
+        text = "x".join(str(int(r[c])) for c in varying)
+        marks.append(
+            xy.text(r["x"], r["y"], text, color=MUTED, anchor="middle", dx=0, dy=-12)
+        )
 
     return xy.scatter_chart(
         *marks,
@@ -452,36 +612,43 @@ def plot_roofline(
 
 
 def plot_accuracy_speed(
-    df: pd.DataFrame, metric: Metric, styles: dict[str, Style], title: str
+    sub: pd.DataFrame,
+    scope: pd.DataFrame,
+    metric: Metric,
+    styles: dict[str, Style],
+    title: str,
 ):
-    """Accuracy cost against speed. Color/symbol follow the impl; the first
-    `math` is solid, the others hollow."""
-    maths = sorted(df["math"].unique())
+    """Accuracy cost against speed, one point per impl (callers pass one size,
+    so the x position compares impls, not problem sizes). Exact results
+    (max abs diff 0) sit on an `exact` row a decade below the smallest error
+    in `scope`, rather than at a made-up value."""
+    errors = scope["max_abs_diff"]
+    exact = errors[errors > 0].min() / 10 if (errors > 0).any() else 1e-8
     marks: list[Any] = []
-    for (impl, m), g in df.groupby(["impl", "math"]):
+    for impl, g in sub.groupby("impl"):
         style = styles[str(impl)]
-        hollow = m != maths[0]
         marks.append(
             xy.scatter(
                 list(g[metric.column]),
-                list(g["max_abs_diff"].clip(lower=1e-8)),
-                name=f"{impl} / {m}",
-                color=SURFACE if hollow else style.color,
-                stroke=style.color if hollow else SURFACE,
-                stroke_width=2 if hollow else 1.5,
+                list(g["max_abs_diff"].where(g["max_abs_diff"] > 0, exact)),
+                name=str(impl),
+                color=style.color,
+                stroke=SURFACE,
+                stroke_width=1.5,
                 symbol=style.symbol,
-                size=10,
+                size=style.size + 3,
                 opacity=1.0,
             )
         )
     return xy.scatter_chart(
         *marks,
         *_chrome(),
-        xy.x_axis(label=metric.unit),
+        xy.x_axis(label=metric.unit, domain=_zero_based(scope[metric.column])),
         _log_axis(
             xy.y_axis,
-            df["max_abs_diff"].clip(lower=1e-8),
+            [*errors[errors > 0], exact],
             "max abs diff vs reference",
+            extra={exact: "exact"},
         ),
         xy.legend(loc="best"),
         title=title,
@@ -614,11 +781,20 @@ def _sweep_section(
                     ),
                 )
             )
+    # The largest size per arithmetic, where speed and error have settled.
+    largest = df[
+        df["problem_size"] == df.groupby("math")["problem_size"].transform("max")
+    ]
+    sizes = ", ".join(sorted(largest["size_label"].unique()))  # type: ignore
     figs.append(
         (
             f"{cfg}_accuracy_speed",
-            plot_accuracy_speed(
-                df, metric, styles, f"{op} / {cfg} — Accuracy vs throughput"
+            _by_math(
+                largest,  # type: ignore
+                f"{op} / {cfg} — Accuracy vs throughput at {sizes}",
+                lambda rows, scope, title: plot_accuracy_speed(
+                    rows, scope, metric, styles, title
+                ),
             ),
         )
     )
@@ -641,6 +817,7 @@ def _sweep_section(
             "max_abs_diff",
         ]
     ].rename(columns={"t_ms": f"{center}_ms"})
+    table["dtype"] = table["dtype"].str.removeprefix("torch.")
 
     runs = ", ".join(
         f"{r} ({c})" for r, c in df[["run_id", "cfg_name"]].drop_duplicates().values
