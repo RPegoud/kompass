@@ -121,18 +121,21 @@ def matmul_triton_tiled_tf32(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
 
 
 # === L2 Cache Swizzle ===
+
+
+@triton.jit
 def get_swizzled_ordering(
     M, N, BLOCK_SIZE_M, BLOCK_SIZE_N, GROUP_SIZE_M
 ) -> tuple[int, int]:
-    pid = cast(int, tl.program_id(0))
+    pid = tl.program_id(0)
     num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
     num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
     num_pid_in_group = GROUP_SIZE_M * num_pid_n
     group_id = pid // num_pid_in_group
     first_pid_m = group_id * GROUP_SIZE_M
     group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)
-    pid_m = cast(int, first_pid_m + ((pid % num_pid_in_group) % group_size_m))
-    pid_n = cast(int, (pid % num_pid_in_group) // group_size_m)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
 
     return pid_m, pid_n
 

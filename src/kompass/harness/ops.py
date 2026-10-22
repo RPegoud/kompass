@@ -17,9 +17,6 @@ class Op(ABC):
     option_names: tuple[str, ...] | None
     tensor_cores: bool = False  # sets the compute ceiling, see KernelSpec.math
 
-    def __init__(self, relative_tolerance: float | None = None) -> None:
-        self.relative_tolerance = relative_tolerance
-
     @property
     def name(self) -> str:
         return type(self).__name__.lower()

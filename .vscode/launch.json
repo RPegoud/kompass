@@ -19,7 +19,7 @@
             "module": "src.kompass.cli.main",
             "args": [
                 "bench",
-                "src/kompass/cases/matmul_square.yaml",
+                "matmul_square",
                 "--backend",
                 "modal:t4"
             ]
@@ -31,7 +31,20 @@
             "module": "src.kompass.cli.main",
             "args": [
                 "bench",
-                "src/kompass/cases/matmul_square.yaml",
+                "matmul_square",
+                "--backend",
+                "modal:t4"
+            ]
+        },
+        {
+            "name": "Bench multiruns",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.kompass.cli.main",
+            "args": [
+                "bench",
+                "matmul_square",
+                "vec_add_sweep",
                 "--backend",
                 "modal:t4"
             ]

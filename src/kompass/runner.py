@@ -1,14 +1,15 @@
+from collections.abc import Callable
 from dataclasses import asdict
+from functools import partial
 from typing import Any
 
 import torch
 import triton
 import triton.language as tl
-from tqdm.auto import tqdm
 from triton.testing import do_bench
 
 from .harness.ops import Op
-from .harness.schema import CaseResult, Payload
+from .harness.schema import BenchResult, CaseResult, Payload
 from .harness.spec import KernelSpec
 from .harness.utils import describe_env, resolve_dtype
 from .kernels import REGISTRY
@@ -59,8 +60,8 @@ def get_mem_reqs(
 
 
 def run_bench(
-    payload: Payload,
-) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str | int | None]]:
+    payload: Payload, on_case_done: Callable[[], None] | None = None
+) -> BenchResult:
     cases = payload.cases
     dtypes = {resolve_dtype(c.dtype) for c in cases}
     device = torch.device(payload.device)
@@ -75,13 +76,10 @@ def run_bench(
     } | env
     sweep_times: list[dict[str, Any]] = []
 
-    pbar = tqdm(cases)
-
-    for case in pbar:
+    for case in cases:
         spec: KernelSpec = REGISTRY[case.op].impls[case.impl]
         op: Op = REGISTRY[case.op].op
         dtype = resolve_dtype(case.dtype)
-        pbar.set_description(f"Benchmarking {case.impl} with {case.params=}, {dtype=}")
 
         free_mem, total_mem, required_mem, enough_mem = get_mem_reqs(
             op=op, params=case.params, dtype=dtype, device=device
@@ -138,5 +136,26 @@ def run_bench(
         )
         sweep_times.append(asdict(bench_res))
         torch.cuda.empty_cache()
+        if on_case_done is not None:
+            on_case_done()
 
-    return meta, sweep_times, env
+    return BenchResult(
+        times=sweep_times,
+        meta=meta,
+        env=env,
+    )
+
+
+def run_local(
+    payloads: list[Payload], on_case_done: Callable[[str], None]
+) -> list[BenchResult | BaseException]:
+    """Serial, local runner."""
+    results: list[BenchResult | BaseException] = []
+    for payload in payloads:
+        try:
+            results.append(
+                run_bench(payload, on_case_done=partial(on_case_done, payload.run_id))
+            )
+        except Exception as e:  # noqa: BLE001
+            results.append(e)
+    return results

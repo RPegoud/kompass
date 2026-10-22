@@ -1,3 +1,5 @@
+from functools import partial
+
 import torch
 
 from ...harness.loaders import TorchLoader, TritonLoader
@@ -72,18 +74,18 @@ class Matmul(Op):
         return 2 * M * N * K
 
 
-matmul_torch = KernelSpec(op=Matmul(), loader=TorchLoader(fn=torch.matmul))
+MatmulSpec = partial(KernelSpec(op=Matmul()))
 
-matmul_triton_tiled_ieee = KernelSpec(
-    op=Matmul(),
+matmul_torch = MatmulSpec(loader=TorchLoader(fn=torch.matmul))
+
+matmul_triton_tiled_ieee = MatmulSpec(
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
         fn_name="matmul_triton_tiled_ieee",
         supports_backward=False,
     ),
 )
-matmul_triton_tiled_tf32 = KernelSpec(
-    op=Matmul(relative_tolerance=1e-2),
+matmul_triton_tiled_tf32 = MatmulSpec(
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
         fn_name="matmul_triton_tiled_tf32",
@@ -91,16 +93,14 @@ matmul_triton_tiled_tf32 = KernelSpec(
     ),
     precision="tf32",
 )
-matmul_triton_tiled_l2_swizzle_ieee = KernelSpec(
-    op=Matmul(),
+matmul_triton_tiled_l2_swizzle_ieee = MatmulSpec(
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
         fn_name="matmul_triton_tiled_l2_swizzle_ieee",
         supports_backward=False,
     ),
 )
-matmul_triton_tiled_l2_swizzle_tf32 = KernelSpec(
-    op=Matmul(),
+matmul_triton_tiled_l2_swizzle_tf32 = MatmulSpec(
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
         fn_name="matmul_triton_tiled_l2_swizzle_tf32",

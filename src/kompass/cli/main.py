@@ -1,7 +1,10 @@
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import typer
+
+if TYPE_CHECKING:
+    from ..harness.schema import Run
 
 app = typer.Typer(
     name="kompass",
@@ -82,49 +85,17 @@ def runs(
     console.print(table)
 
 
-@app.command()
-def bench(
-    config_name: Annotated[
-        str,
-        typer.Argument(
-            help="The configuration name, as defined in `src/kompass/cases/*.yaml`, e.g. `vec_add_sweep`."
-        ),
-    ],
-    backend: Annotated[
-        str, typer.Option(help="Either `local` or `modal:gpu`, e.g. `modal:h100`")
-    ] = "local",
-    device: str = "cuda:0",
-):
-    """Run one Op against multiple `Cases` ({impl, shape, dtype} tuples)."""
-    import json
+def _build_run(config_name: str, device: str) -> Run:
+    """Load `cases/<config_name>.yaml`, validate it and expand it into a `Run`."""
     import uuid
-    from collections import Counter
-    from functools import partial
     from itertools import product
 
     from omegaconf import OmegaConf
 
     from ..harness.ops import Op
-    from ..harness.schema import Case, Payload, SweepConfig
-    from ..harness.utils import get_timestamp, git_commit, repo_root
+    from ..harness.schema import Case, Payload, Run, SweepConfig
+    from ..harness.utils import get_timestamp, repo_root
     from ..kernels import REGISTRY
-
-    def run_local(
-        payload: Payload,
-    ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str | int | None]]:
-        from ..runner import run_bench
-
-        return run_bench(payload)
-
-    def run_modal(
-        payload: Payload, gpu: str
-    ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, str | int | None]]:
-        import modal
-
-        from ..infra.modal_runner import app, run_modal_bench
-
-        with modal.enable_output(), app.run():
-            return run_modal_bench.with_options(gpu=gpu).remote(payload)
 
     run_id = uuid.uuid4().hex[:8]
     timestamp = get_timestamp()
@@ -146,9 +117,6 @@ def bench(
     op: Op = REGISTRY[cfg.op].op
 
     output_dir = repo_root() / "logs" / f"{timestamp}__{op.name}__{run_id}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    meta_file = output_dir / "meta.json"
-    times_file = output_dir / "times.jsonl"
 
     params_set: list[dict[str, int]]
     if cfg.shapes is not None:
@@ -187,8 +155,50 @@ def bench(
         cases=cases,
         device=device,
     )
+    return Run(
+        config_name=config_name,
+        run_id=run_id,
+        timestamp=timestamp,
+        output_dir=output_dir,
+        payload=payload,
+    )
+
+
+@app.command()
+def bench(
+    config_names: Annotated[
+        list[str],
+        typer.Argument(
+            help="The configuration name(s), as defined in `src/kompass/cases/*.yaml`, e.g. `vec_add_sweep matmul_k_sweep`."
+        ),
+    ],
+    backend: Annotated[
+        str, typer.Option(help="Either `local` or `modal:gpu`, e.g. `modal:h100`")
+    ] = "local",
+    device: str = "cuda:0",
+):
+    """Run one or more sweeps, each benchmarking one Op against multiple `Cases`
+    ({impl, shape, dtype} tuples)."""
+    import json
+    from collections import Counter
+    from functools import partial
+
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
+    from ..harness.utils import git_commit
+
+    runs = [_build_run(config_name, device) for config_name in config_names]
 
     if backend == "local":
+        from ..runner import run_local
+
         runner = run_local
 
     elif backend.startswith("modal:"):
@@ -196,6 +206,9 @@ def bench(
         gpu = gpu.upper()
         if gpu == "H100":
             gpu += "!"  # `!` prevents automatic upgrades to H200
+
+        from ..infra.modal_runner import run_modal
+
         runner = partial(run_modal, gpu=gpu)
 
     else:
@@ -203,43 +216,71 @@ def bench(
             f"Expected backend format `modal:gpu`, e.g. `modal:h100`, got {backend}"
         )
 
-    meta, times, env = {}, [], {}
-
-    try:
-        meta, times, env = runner(payload)
-    except Exception as e:
-        meta["error"] = repr(e)
-        raise
-    finally:
-        meta |= {
-            "cfg_name": config_name,
-            "kind": "bench",
-            "run_id": run_id,
-            "timestamp": timestamp,
-            "git_commit": git_commit(),
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}", style="dim"),
+        BarColumn(bar_width=30, style="dim", complete_style="green"),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        # transient=True,
+    ) as progress:
+        tasks = {
+            run.run_id: progress.add_task(
+                f"{run.config_name} ({run.run_id})", total=len(run.payload.cases)
+            )
+            for run in runs
         }
-        for row in times:  # flatten params dict to "param_{name}"
-            params = row.pop("params")
-            for p_name, p_value in params.items():
-                row[f"param_{p_name}"] = p_value
-            row |= env
-            row |= {
-                "cfg_name": config_name,
-                "run_id": run_id,
-                "kind": "bench",
-                "measured_copy_bandwidth_gbps_triton": meta[
-                    "measured_copy_bandwidth_gbps_triton"
-                ],
-            }
+        results = runner(
+            [run.payload for run in runs],
+            on_case_done=lambda run_id: progress.advance(tasks[run_id]),
+        )
 
-        with open(meta_file, "w", encoding="utf-8") as f:
+    git = git_commit()
+    n_failed = 0
+    for run, result in zip(runs, results):
+        if isinstance(result, BaseException):
+            meta: dict[str, Any] = {"error": repr(result)}
+            times: list[dict[str, Any]] = []
+            summary = f"failed: {meta['error']}"
+            n_failed += 1
+        else:
+            meta, times = result.meta, result.times
+            summary = dict(Counter(r["status"] for r in times))
+            for row in times:  # flatten params dict to "param_{name}"
+                params = row.pop("params")
+                for p_name, p_value in params.items():
+                    row[f"param_{p_name}"] = p_value
+                row |= result.env
+                row |= {
+                    "cfg_name": run.config_name,
+                    "run_id": run.run_id,
+                    "kind": "bench",
+                    "git_commit": git,
+                    "measured_copy_bandwidth_gbps_triton": meta[
+                        "measured_copy_bandwidth_gbps_triton"
+                    ],
+                }
+
+        meta |= {
+            "cfg_name": run.config_name,
+            "run_id": run.run_id,
+            "timestamp": run.timestamp,
+            "kind": "bench",
+            "git_commit": git,
+        }
+
+        run.output_dir.mkdir(parents=True, exist_ok=True)
+        with open(run.output_dir / "meta.json", "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
-        with open(times_file, "w", encoding="utf-8") as f:
+        with open(run.output_dir / "times.jsonl", "w", encoding="utf-8") as f:
             f.writelines(json.dumps(row) + "\n" for row in times)
 
-    typer.echo(
-        f"Run complete!\nSummary:{json.dumps(Counter([r['status'] for r in times]), indent=2)}"
-    )
+        typer.echo(f"{run.config_name} ({run.run_id}): {summary}")
+
+    if n_failed:
+        typer.echo(f"{n_failed}/{len(runs)} sweeps failed.", err=True)
+        raise typer.Exit(1)
+    typer.echo("Run complete!")
 
 
 @app.command()

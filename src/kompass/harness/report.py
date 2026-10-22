@@ -308,18 +308,16 @@ def _series(
         if fill in hollow
     ]
     if lines:
-        marks.insert(
-            0, xy.line(x, y, name=name, color=style.color, width=2.5, curve="smooth")
-        )
+        marks.insert(0, xy.line(x, y, name=name, color=style.color, width=2.5))
     return marks
 
 
-def _line_chart(marks: list[Any], x_axis: Any, y_label: str, y_max: Any, title: str):
+def _line_chart(marks: list[Any], x_axis: Any, y_axis: Any, title: str):
     return xy.line_chart(
         *marks,
         *_chrome(),
         x_axis,
-        xy.y_axis(label=y_label, domain=_zero_based(*y_max)),
+        y_axis,
         xy.legend(loc="best"),
         title=title,
         width=WIDTH,
@@ -327,8 +325,11 @@ def _line_chart(marks: list[Any], x_axis: Any, y_label: str, y_max: Any, title: 
     )
 
 
-def plot_throughput(sub: pd.DataFrame, metric: Metric, styles: dict[str, Style]):
-    """Throughput vs problem size, with the ceilings of this unit."""
+def plot_throughput(
+    sub: pd.DataFrame, metric: Metric, styles: dict[str, Style], title: str
+):
+    """Throughput vs problem size, with the ceilings of this unit. Log y:
+    throughput spans decades across sizes, and peaks sit far above the data."""
     pos, x_axis = _size_axis(sub)
     center, whiskers = quantile_desc(sub)
     col = metric.column
@@ -346,7 +347,11 @@ def plot_throughput(sub: pd.DataFrame, metric: Metric, styles: dict[str, Style])
                 xy.errorbar(
                     list(x),
                     list(g[col]),
-                    yerr=(list(g[col] - lo), list(hi - g[col])),
+                    # clip: tied quantiles round to ~-1e-16 instead of 0
+                    yerr=(
+                        list((g[col] - lo).clip(lower=0)),
+                        list((hi - g[col]).clip(lower=0)),
+                    ),
                     color=styles[str(impl)].color,
                     cap_size=0.08,  # data units (ordinal positions), not px
                     opacity=0.7,
@@ -362,13 +367,12 @@ def plot_throughput(sub: pd.DataFrame, metric: Metric, styles: dict[str, Style])
     for text, v in roofs.items():
         marks.append(xy.hline(v, text=f"{text} ({v:.0f})", color=MUTED, width=1))
 
-    return _line_chart(
-        marks,
-        x_axis,
+    y_axis = _log_axis(
+        xy.y_axis,
+        [*(sub[col] * sub["t_ms"] / sub["t_hi_ms"]), *roofs.values()],
         f"{metric.unit} ({center}" + (f", whiskers {whiskers})" if whiskers else ")"),
-        [sub[col] * sub["t_ms"] / sub["t_lo_ms"], *roofs.values()],
-        f"Throughput — {sub['dtype'].iloc[0]}",
     )
+    return _line_chart(marks, x_axis, y_axis, title)
 
 
 def plot_pct(
@@ -394,10 +398,11 @@ def plot_pct(
             hollow=hollow,
         )
     marks.append(xy.hline(100, text=ref, color=MUTED, width=1))
-    return _line_chart(marks, x_axis, f"% of {ref}", [sub[column], 100], title)
+    y_axis = xy.y_axis(label=f"% of {ref}", domain=_zero_based(sub[column], 100))
+    return _line_chart(marks, x_axis, y_axis, title)
 
 
-def plot_roofline(sub: pd.DataFrame, styles: dict[str, Style]):
+def plot_roofline(sub: pd.DataFrame, styles: dict[str, Style], title: str):
     """Classic roofline: one roof per arithmetic run, impls as points."""
     lo = sub["arithmetic_intensity"].min() * 0.5
     hi = sub["arithmetic_intensity"].max() * 2
@@ -427,13 +432,15 @@ def plot_roofline(sub: pd.DataFrame, styles: dict[str, Style]):
         ),
         _log_axis(xy.y_axis, [*sub["tflops"], *sub["peak_tflops"]], "TFLOPS"),
         xy.legend(loc="lower right"),
-        title=f"Roofline — {sub['dtype'].iloc[0]}",
+        title=title,
         width=WIDTH,
         height=HEIGHT,
     )
 
 
-def plot_accuracy_speed(df: pd.DataFrame, metric: Metric, styles: dict[str, Style]):
+def plot_accuracy_speed(
+    df: pd.DataFrame, metric: Metric, styles: dict[str, Style], title: str
+):
     """Accuracy cost against speed. Color/symbol follow the impl; the first
     dtype is solid, the others hollow."""
     dtypes = sorted(df["dtype"].unique())
@@ -464,7 +471,7 @@ def plot_accuracy_speed(df: pd.DataFrame, metric: Metric, styles: dict[str, Styl
             "max abs diff vs reference",
         ),
         xy.legend(loc="best"),
-        title="Accuracy vs throughput",
+        title=title,
         width=WIDTH,
         height=HEIGHT,
     )
@@ -486,14 +493,12 @@ def write_plots(figs: list[tuple[str, xy.Chart]], out_dir: Path) -> Path:
     return pdf_path
 
 
-def _op_section(
-    op: str, df: pd.DataFrame, baseline: str | None
+def _sweep_section(
+    op: str, cfg: str, df: pd.DataFrame, baseline: str | None
 ) -> tuple[list[tuple[str, xy.Chart]], pd.DataFrame, str]:
-    """Plots, results table and markdown for one op."""
+    """Plots, results table and markdown for one sweep (one op, one config)."""
     failed = df[df["status"] != "ok"]
-    # Several sweeps of one op can measure the same case (4096^3 is in both
-    # matmul sweeps): keep the newest. Rows arrive in chronological order.
-    df = add_derived(df).drop_duplicates(["impl", "dtype", "size_label"], keep="last")
+    df = add_derived(df)
     baseline = resolve_baseline(df, baseline)
     metric = Metric.for_op(df)
     styles = impl_styles(df, baseline)
@@ -510,31 +515,46 @@ def _op_section(
         short = str(dtype).replace("torch.", "")
         others = sub[sub["impl"] != baseline]
         figs += [
-            (f"{op}_throughput_{short}", plot_throughput(sub, metric, styles)),
             (
-                f"{op}_pct_ceiling_{short}",
+                f"{cfg}_throughput_{short}",
+                plot_throughput(
+                    sub, metric, styles, f"{op} / {cfg} — Throughput — {short}"
+                ),
+            ),
+            (
+                f"{cfg}_pct_ceiling_{short}",
                 plot_pct(
                     sub,
                     "pct_of_ceiling",
                     "ceiling",
-                    f"% of ceiling (hollow = memory-bound) — {dtype}",
+                    f"{op} / {cfg} — % of ceiling (hollow = memory-bound) — {short}",
                     styles,
                     hollow_memory_bound=True,
                 ),
             ),
             (
-                f"{op}_pct_baseline_{short}",
+                f"{cfg}_pct_baseline_{short}",
                 plot_pct(
                     others,
                     "pct_of_baseline",
                     baseline,
-                    f"% of {baseline} {metric.unit} — {dtype}",
+                    f"{op} / {cfg} — % of {baseline} {metric.unit} — {short}",
                     styles,
                 ),
             ),
-            (f"{op}_roofline_{short}", plot_roofline(sub, styles)),
+            (
+                f"{cfg}_roofline_{short}",
+                plot_roofline(sub, styles, f"{op} / {cfg} — Roofline — {short}"),
+            ),
         ]
-    figs.append((f"{op}_accuracy_speed", plot_accuracy_speed(df, metric, styles)))
+    figs.append(
+        (
+            f"{cfg}_accuracy_speed",
+            plot_accuracy_speed(
+                df, metric, styles, f"{op} / {cfg} — Accuracy vs throughput"
+            ),
+        )
+    )
 
     center, whiskers = quantile_desc(df)
     table = df.sort_values(
@@ -557,7 +577,7 @@ def _op_section(
         f"{r} ({c})" for r, c in df[["run_id", "cfg_name"]].drop_duplicates().values
     )
     md = (
-        f"## {op}\n\n"
+        f"## {op} / {cfg}\n\n"
         f"runs: {runs}  \n"
         f"git: {', '.join(sorted(df['git_commit'].astype(str).unique()))}  \n"
         f"baseline: {baseline}  \n"
@@ -573,7 +593,7 @@ def _op_section(
     if not failed.empty:
         cols = ["impl", "dtype", "status", "error"]
         md += "\n\n### Not ok\n\n" + failed[cols].to_markdown(index=False)
-    return figs, table.assign(op=op), md
+    return figs, table.assign(op=op, cfg_name=cfg), md
 
 
 def generate_report(
@@ -584,22 +604,22 @@ def generate_report(
     gpu: str | None = None,
     baseline: str | None = None,
 ) -> Path:
-    """One section per op: records of different ops share no params, sizes
-    or baseline, so they are never mixed in one table or plot."""
+    """One section per sweep (op, cfg_name): different sweeps share no x axis,
+    even for the same op, so they are never mixed in one table or plot."""
     df = load_records(logs_dir, cfg_name, run_id, gpu)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     figs: list[tuple[str, xy.Chart]] = []
     tables, sections = [], []
-    for op, g in df.groupby("op"):
-        op_figs, table, md = _op_section(str(op), g, baseline)
+    for (op, cfg), g in df.groupby(["op", "cfg_name"]):  # type: ignore
+        op_figs, table, md = _sweep_section(str(op), str(cfg), g, baseline)
         figs += op_figs
         tables.append(table)
         sections.append(md)
 
     write_plots(figs, out_dir)
     table = pd.concat(tables, ignore_index=True)
-    table[["op", *table.columns.drop("op")]].to_csv(
+    table[["op", "cfg_name", *table.columns.drop(["op", "cfg_name"])]].to_csv(
         out_dir / "summary.csv", index=False
     )
 

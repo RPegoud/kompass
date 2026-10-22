@@ -27,10 +27,10 @@ After `uv sync`, all endpoints are available through the `kompass` entry point.
 | Command | What it does |
 | --- | --- |
 | `kompass list` | Prints every registered Op and its implementations. |
-| `kompass bench <config_name> [--backend local\|modal:<gpu>] [--device cuda:0]` | Runs a sweep: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. |
+| `kompass bench <config_name> [<config_name> ...] [--backend local\|modal:<gpu>] [--device cuda:0]` | Runs one or more sweeps: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. Sweeps run one after another locally, and in parallel on Modal (one GPU each). A failed sweep doesn't stop the others; `bench` exits with code 1 if any failed. |
 | `kompass profile <op>/<impl> -p K=V [-p K=V ...] [--dtype float32] [--set full\|roofline\|detailed]` | Profiles one case under `ncu`, then ingests the report automatically. |
 | `kompass ingest <reports/.../report.ncu-rep>` | Parses an existing Nsight Compute report into `records.jsonl` (`profile` calls this for you). |
-| `kompass report [--config <config_name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<config_name>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. One section per op; each op's baseline defaults to its `torch` impl. |
+| `kompass report [--config <config_name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<config_name>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. One section per sweep (op + config), so sweeps of the same op never share an axis; each baseline defaults to the op's `torch` impl. |
 
 ### 💡 Examples
 
@@ -47,6 +47,9 @@ kompass bench vec_add_sweep
 # Same sweep on a Modal H100
 kompass bench vec_add_sweep --backend modal:h100
 
+# Two sweeps in parallel, each on its own Modal H100
+kompass bench vec_add_sweep matmul_square --backend modal:h100
+
 # Profile a single case. The key is <op>/<impl suffix>: `vec_add/triton` -> `vec_add_triton`
 kompass profile vec_add/triton -p N=16777216 --dtype float32 --set full
 ```
@@ -59,7 +62,7 @@ kompass profile vec_add/triton -p N=16777216 --dtype float32 --set full
 
 ```
 logs/<timestamp>__<op>__<run_id>/   # bench
-├── meta.json        # run config, GPU/driver/nvcc info, measured copy bandwidth, git commit
+├── meta.json        # run config, GPU/driver/nvcc info, measured copy bandwidth, git commit (or `error` if the sweep failed)
 └── times.jsonl      # one row per case (times at each quantile, flops, bytes, status, memory)
 
 logs/<timestamp>__<op>__<uid>/      # profile (ingest)
@@ -90,10 +93,10 @@ one-liner, e.g. `pd.read_json("logs/.../times.jsonl", lines=True)`.
 ├── logs/                       # bench / profile records (generated)
 ├── reports/                    # ncu reports (generated)
 └── src/kompass/
-    ├── cli/main.py             # Typer app: list, bench, profile, ingest
-    ├── runner.py               # run_bench(): copy-bandwidth probe, per-case memory check, bench loop
+    ├── cli/main.py             # Typer app: list, runs, bench, profile, ingest, report
+    ├── runner.py               # run_bench(): copy-bandwidth probe, per-case memory check, bench loop; run_local()
     ├── infra/
-    │   └── modal_runner.py     # Modal app/image/volumes wrapping run_bench on a remote GPU
+    │   └── modal_runner.py     # Modal app/image/volumes wrapping run_bench; run_modal() dispatches sweeps in parallel
     ├── harness/
     │   ├── ops.py              # Op ABC: reference, compare, make_inputs, bytes_moved, flops
     │   ├── loaders.py          # TorchLoader, TritonLoader, CudaLoader (JIT, per-arch cache)
@@ -372,7 +375,7 @@ The `shapes` list above runs only the 3 square ones.
 
 ```bash
 kompass list                                              # the new impls should be listed
-kompass bench vec_add_sweep        # correctness-gated benchmark
+kompass bench vec_add_sweep                               # correctness-gated benchmark
 kompass profile vec_add/cuda -p N=16777216                # Nsight Compute deep dive
 ```
 
@@ -391,5 +394,5 @@ kompass profile vec_add/cuda -p N=16777216                # Nsight Compute deep 
 ## 🗺️ Roadmap
 
 - [ ] `Tune` endpoint, takes an op/impl with a single set of parameters and returns the tuned block sizes and number of warps.
-- [ ] `Report` endpoint, filters impl records for a specific device and returns an `.md` file with a detailed performance report and a roofline plot.
+- [x] `Report` endpoint, filters impl records for a specific device and returns an `.md` file with a detailed performance report and a roofline plot.
 - [ ] Adding support for `Pallas` (JAX) and/or `CuteDSL` kernels.
