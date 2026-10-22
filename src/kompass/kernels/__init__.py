@@ -11,7 +11,7 @@ for r in [_vec_add, _softmax, _matmul]:
 
 def _check_names() -> None:
     """Impl keys follow `{op}_{framework}[_{details}]`, e.g.
-    `matmul_triton_tiled_tf32`. Records and reports rely on it."""
+    `matmul_triton_tiled_l2_swizzle`. Records and reports rely on it."""
     for op_name, entry in REGISTRY.items():
         for key, spec in entry.impls.items():
             prefix = f"{op_name}_{spec.loader.framework}"

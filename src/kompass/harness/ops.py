@@ -14,11 +14,8 @@ class CompareResult:
 
 class Op(ABC):
     param_names: tuple[str, ...]
-    option_names: tuple[str, ...] | None
+    option_names: tuple[str, ...] | None  # keys a sweep's `options` may set
     tensor_cores: bool = False  # sets the compute ceiling, see KernelSpec.math
-
-    def __init__(self, relative_tolerance: float | None = None) -> None:
-        self.relative_tolerance = relative_tolerance
 
     @property
     def name(self) -> str:

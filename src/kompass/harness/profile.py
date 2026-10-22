@@ -14,6 +14,7 @@ def profile_one(
     seed: int,
     device: torch.device,
     meta_file: Path,
+    options: dict[str, str],
     warmup: int = 5,
 ):
     try:
@@ -26,11 +27,11 @@ def profile_one(
         )
 
         for _ in range(warmup):
-            spec.kernel(*tensors)
+            spec.kernel(*tensors, **options)
         torch.cuda.synchronize()
 
         torch.cuda.profiler.start()
-        spec.kernel(*tensors)
+        spec.kernel(*tensors, **options)
         torch.cuda.synchronize()
         torch.cuda.profiler.stop()
 
@@ -53,6 +54,7 @@ def main(meta_file: Path) -> None:
     profile_one(
         spec,
         params=meta["params"],
+        options=meta["options"],
         dtype=resolve_dtype(meta["dtype"]),
         seed=meta["seed"],
         device=torch.device(meta["device"]),

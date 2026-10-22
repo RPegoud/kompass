@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from .loaders import Loader
 from .ops import CompareResult, Op
@@ -20,22 +20,24 @@ class TestResults:
 
 class KernelSpec:
     def __init__(
-        self, op: Op, loader: Loader, precision: Literal["ieee", "tf32"] = "ieee"
+        self, op: Op, loader: Loader, option_names: tuple[str, ...] = ()
     ) -> None:
         self.op = op
         self.loader = loader
-        self.precision = precision  # how float32 inputs are multiplied
+        self.option_names = option_names  # kwargs the kernel accepts, see Op
         self.name = self.loader.fn_name
         self._kernel = None
 
-    def math(self, dtype: torch.dtype) -> str:
+    def math(self, dtype: torch.dtype, options: dict[str, str] | None = None) -> str:
         """The arithmetic this kernel runs on `dtype`, which sets its compute
         ceiling: tensor-core ops run narrow dtypes natively and float32 as
-        tf32 when allowed; other ops compute in float32 on CUDA cores."""
+        tf32 when `input_precision="tf32"`; other ops compute in float32 on
+        CUDA cores."""
         if not self.op.tensor_cores:
             return "float32"
         if str(dtype) == "torch.float32":
-            return "tf32" if self.precision == "tf32" else "float32"
+            tf32 = (options or {}).get("input_precision") == "tf32"
+            return "tf32" if tf32 else "float32"
         return str(dtype).removeprefix("torch.")
 
     @property
@@ -51,8 +53,9 @@ class KernelSpec:
         params: dict[str, int],
         dtype: torch.dtype,
         seed: int,
+        options: dict[str, str] | None = None,
     ) -> TestResults:
-        pred = self.kernel(*tensors)
+        pred = self.kernel(*tensors, **(options or {}))
         ref = self.op.reference(*tensors, params=params)
         res: CompareResult = self.op.compare(pred, ref)
         return TestResults(
@@ -101,12 +104,16 @@ class KernelSpec:
         device: torch.device,
         seed: int,
         quantiles: tuple[float, ...] = (0.2, 0.5, 0.8),
+        options: dict[str, str] | None = None,
     ) -> tuple[tuple[float, ...], float]:
         tensors = self._make_inputs(
             params=params, dtype=dtype, device=device, seed=seed
         )
+        options = options or {}
 
-        gate = self._check(tensors=tensors, params=params, dtype=dtype, seed=seed)
+        gate = self._check(
+            tensors=tensors, params=params, dtype=dtype, seed=seed, options=options
+        )
         if not gate.correct:
             raise ValueError(
                 f"The kernel {self.name} did not pass the correctness test with params {params=}; {dtype=}: {gate.correct=}, {gate.max_abs_diff=}\nAborting benchmark..."
@@ -115,7 +122,7 @@ class KernelSpec:
         from triton.testing import do_bench
 
         times: tuple[float, ...] = do_bench(
-            fn=lambda: self.kernel(*tensors),
+            fn=lambda: self.kernel(*tensors, **options),
             quantiles=quantiles,
         )  # type: ignore
 
