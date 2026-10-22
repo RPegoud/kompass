@@ -21,6 +21,7 @@ from typing import Any
 import pandas as pd
 import xy
 from pypdf import PdfWriter
+from xy.facets import FacetGrid
 
 # Dense vendor peaks in TFLOPS, keyed by the record's `math` (KernelSpec.math).
 # H100 SXM5: float32 on CUDA cores; tf32 / bfloat16 on tensor cores.
@@ -326,12 +327,17 @@ def _line_chart(marks: list[Any], x_axis: Any, y_axis: Any, title: str):
 
 
 def plot_throughput(
-    sub: pd.DataFrame, metric: Metric, styles: dict[str, Style], title: str
+    sub: pd.DataFrame,
+    scope: pd.DataFrame,
+    metric: Metric,
+    styles: dict[str, Style],
+    title: str,
 ):
     """Throughput vs problem size, with the ceilings of this unit. Log y:
-    throughput spans decades across sizes, and peaks sit far above the data."""
-    pos, x_axis = _size_axis(sub)
-    center, whiskers = quantile_desc(sub)
+    throughput spans decades across sizes, and peaks sit far above the data.
+    Axes span `scope` so facet panels line up."""
+    pos, x_axis = _size_axis(scope)
+    center, whiskers = quantile_desc(scope)
     col = metric.column
     marks: list[Any] = []
 
@@ -359,17 +365,18 @@ def plot_throughput(
             )
         marks += _series(x, g[col], str(impl), styles[str(impl)])
 
-    if metric.column == "gbps":
-        roofs = {"measured copy bandwidth": sub["mem_gbps"].max()}
-    else:
-        roofs = sub.groupby("math")["peak_tflops"].first()
-        roofs = {f"{m} peak": v for m, v in roofs.items()}
-    for text, v in roofs.items():
+    def roofs(rows: pd.DataFrame) -> dict[str, Any]:
+        if metric.column == "gbps":
+            return {"measured copy bandwidth": rows["mem_gbps"].max()}
+        peaks = rows.groupby("math")["peak_tflops"].first()
+        return {f"{m} peak": v for m, v in peaks.items()}
+
+    for text, v in roofs(sub).items():
         marks.append(xy.hline(v, text=f"{text} ({v:.0f})", color=MUTED, width=1))
 
     y_axis = _log_axis(
         xy.y_axis,
-        [*(sub[col] * sub["t_ms"] / sub["t_hi_ms"]), *roofs.values()],
+        [*(scope[col] * scope["t_ms"] / scope["t_hi_ms"]), *roofs(scope).values()],
         f"{metric.unit} ({center}" + (f", whiskers {whiskers})" if whiskers else ")"),
     )
     return _line_chart(marks, x_axis, y_axis, title)
@@ -377,15 +384,18 @@ def plot_throughput(
 
 def plot_pct(
     sub: pd.DataFrame,
+    scope: pd.DataFrame,
     column: str,
     ref: str,
     title: str,
     styles: dict[str, Style],
     hollow_memory_bound: bool = False,
+    line_text: str | None = None,
 ):
     """Each impl as a percentage of a reference (the baseline, or its own
-    ceiling), per size, with the 100% line labelled `ref`."""
-    pos, x_axis = _size_axis(sub)
+    ceiling), per size, with the 100% line labelled `line_text` (default
+    `ref`). Axes span `scope`."""
+    pos, x_axis = _size_axis(scope)
     marks: list[Any] = []
     for impl, g in sub.dropna(subset=[column]).groupby("impl"):
         g = g.sort_values("problem_size")
@@ -397,17 +407,20 @@ def plot_pct(
             styles[str(impl)],
             hollow=hollow,
         )
-    marks.append(xy.hline(100, text=ref, color=MUTED, width=1))
-    y_axis = xy.y_axis(label=f"% of {ref}", domain=_zero_based(sub[column], 100))
+    marks.append(xy.hline(100, text=line_text or ref, color=MUTED, width=1))
+    y_axis = xy.y_axis(label=f"% of {ref}", domain=_zero_based(scope[column], 100))
     return _line_chart(marks, x_axis, y_axis, title)
 
 
-def plot_roofline(sub: pd.DataFrame, styles: dict[str, Style], title: str):
-    """Classic roofline: one roof per arithmetic run, impls as points."""
-    lo = sub["arithmetic_intensity"].min() * 0.5
-    hi = sub["arithmetic_intensity"].max() * 2
+def plot_roofline(
+    sub: pd.DataFrame, scope: pd.DataFrame, styles: dict[str, Style], title: str
+):
+    """Classic roofline: one roof per arithmetic run, impls as points. Axes
+    span `scope`."""
+    lo = scope["arithmetic_intensity"].min() * 0.5
+    hi = scope["arithmetic_intensity"].max() * 2
     xs = [lo * (hi / lo) ** (i / 200) for i in range(201)]
-    bw = sub["mem_gbps"].max()
+    bw = scope["mem_gbps"].max()
 
     marks: list[Any] = []
     for m, peak in sub.groupby("math")["peak_tflops"].first().items():
@@ -430,7 +443,7 @@ def plot_roofline(sub: pd.DataFrame, styles: dict[str, Style], title: str):
             [lo, hi],
             "algorithmic arithmetic intensity (FLOP / ideal byte)",
         ),
-        _log_axis(xy.y_axis, [*sub["tflops"], *sub["peak_tflops"]], "TFLOPS"),
+        _log_axis(xy.y_axis, [*scope["tflops"], *scope["peak_tflops"]], "TFLOPS"),
         xy.legend(loc="lower right"),
         title=title,
         width=WIDTH,
@@ -442,17 +455,17 @@ def plot_accuracy_speed(
     df: pd.DataFrame, metric: Metric, styles: dict[str, Style], title: str
 ):
     """Accuracy cost against speed. Color/symbol follow the impl; the first
-    dtype is solid, the others hollow."""
-    dtypes = sorted(df["dtype"].unique())
+    `math` is solid, the others hollow."""
+    maths = sorted(df["math"].unique())
     marks: list[Any] = []
-    for (impl, dtype), g in df.groupby(["impl", "dtype"]):
+    for (impl, m), g in df.groupby(["impl", "math"]):
         style = styles[str(impl)]
-        hollow = dtype != dtypes[0]
+        hollow = m != maths[0]
         marks.append(
             xy.scatter(
                 list(g[metric.column]),
                 list(g["max_abs_diff"].clip(lower=1e-8)),
-                name=f"{impl} / {str(dtype).replace('torch.', '')}",
+                name=f"{impl} / {m}",
                 color=SURFACE if hollow else style.color,
                 stroke=style.color if hollow else SURFACE,
                 stroke_width=2 if hollow else 1.5,
@@ -477,7 +490,40 @@ def plot_accuracy_speed(
     )
 
 
-def write_plots(figs: list[tuple[str, xy.Chart]], out_dir: Path) -> Path:
+def _ceiling_label(rows: pd.DataFrame) -> str:
+    """What 100% of ceiling means for `rows` (one `math`): its compute peak,
+    the copy bandwidth, or the min of both when bounds are mixed."""
+    m, peak, bw = (
+        rows["math"].iloc[0],
+        rows["peak_tflops"].max(),
+        rows["mem_gbps"].max(),
+    )
+    bounds = set(rows["bound"])
+    if bounds == {"compute"}:
+        return f"ceiling: {m} peak ({peak:.0f} TFLOPS)"
+    if bounds == {"memory"}:
+        return f"ceiling: copy bandwidth ({bw:.0f} GB/s)"
+    return f"ceiling: min({m} peak {peak:.0f} TFLOPS, {bw:.0f} GB/s x intensity)"
+
+
+def _by_math(rows: pd.DataFrame, title: str, plot: Any) -> Any:
+    """`plot(rows, scope, title)` once per `math`, side by side on one page:
+    impls of one dtype can run different arithmetic (float32 vs tf32), each
+    under its own ceiling. Panels share `rows` as scope, so axes line up."""
+    maths = sorted(rows["math"].unique())
+    if len(maths) == 1:
+        return plot(rows, rows, title)
+    panels = [plot(rows[rows["math"] == m], rows, f"{title}, {m} math") for m in maths]
+    return FacetGrid(
+        [p.figure() for p in panels],
+        maths,
+        cols=len(maths),
+        width=WIDTH * len(maths),
+        height=HEIGHT,
+    )
+
+
+def write_plots(figs: list[tuple[str, Any]], out_dir: Path) -> Path:
     """One PNG per plot (for the markdown) + every plot as a page of one PDF."""
     plots_dir = out_dir / "plots"
     plots_dir.mkdir(parents=True, exist_ok=True)
@@ -495,7 +541,7 @@ def write_plots(figs: list[tuple[str, xy.Chart]], out_dir: Path) -> Path:
 
 def _sweep_section(
     op: str, cfg: str, df: pd.DataFrame, baseline: str | None
-) -> tuple[list[tuple[str, xy.Chart]], pd.DataFrame, str]:
+) -> tuple[list[tuple[str, Any]], pd.DataFrame, str]:
     """Plots, results table and markdown for one sweep (one op, one config)."""
     failed = df[df["status"] != "ok"]
     df = add_derived(df)
@@ -503,50 +549,71 @@ def _sweep_section(
     metric = Metric.for_op(df)
     styles = impl_styles(df, baseline)
 
-    base = df[df["impl"] == baseline].set_index(["dtype", "size_label"])[metric.column]
+    # Compare like with like: the baseline running the same arithmetic.
+    keys = ["dtype", "math", "size_label"]
+    base = df[df["impl"] == baseline].set_index(keys)[metric.column]
     df["pct_of_baseline"] = (
-        100
-        * df[metric.column]
-        / [base.get((d, s)) for d, s in zip(df["dtype"], df["size_label"])]
+        100 * df[metric.column] / [base.get(k) for k in zip(*(df[c] for c in keys))]
     )  # type: ignore
 
-    figs: list[tuple[str, xy.Chart]] = []
+    figs: list[tuple[str, Any]] = []
     for dtype, sub in df.groupby("dtype"):
         short = str(dtype).replace("torch.", "")
-        others = sub[sub["impl"] != baseline]
+        head = f"{op} / {cfg} —"
+        # rows whose arithmetic the baseline didn't run have no % of baseline
+        vs_base = sub[(sub["impl"] != baseline) & sub["pct_of_baseline"].notna()]
         figs += [
             (
                 f"{cfg}_throughput_{short}",
-                plot_throughput(
-                    sub, metric, styles, f"{op} / {cfg} — Throughput — {short}"
+                _by_math(
+                    sub,
+                    f"{head} Throughput — {short}",
+                    lambda rows, scope, title: plot_throughput(
+                        rows, scope, metric, styles, title
+                    ),
                 ),
             ),
             (
                 f"{cfg}_pct_ceiling_{short}",
-                plot_pct(
+                _by_math(
                     sub,
-                    "pct_of_ceiling",
-                    "ceiling",
-                    f"{op} / {cfg} — % of ceiling (hollow = memory-bound) — {short}",
-                    styles,
-                    hollow_memory_bound=True,
-                ),
-            ),
-            (
-                f"{cfg}_pct_baseline_{short}",
-                plot_pct(
-                    others,
-                    "pct_of_baseline",
-                    baseline,
-                    f"{op} / {cfg} — % of {baseline} {metric.unit} — {short}",
-                    styles,
+                    f"{head} % of ceiling (hollow = memory-bound) — {short}",
+                    lambda rows, scope, title: plot_pct(
+                        rows,
+                        scope,
+                        "pct_of_ceiling",
+                        "ceiling",
+                        title,
+                        styles,
+                        hollow_memory_bound=True,
+                        line_text=_ceiling_label(rows),
+                    ),
                 ),
             ),
             (
                 f"{cfg}_roofline_{short}",
-                plot_roofline(sub, styles, f"{op} / {cfg} — Roofline — {short}"),
+                _by_math(
+                    sub,
+                    f"{head} Roofline — {short}",
+                    lambda rows, scope, title: plot_roofline(
+                        rows, scope, styles, title
+                    ),
+                ),
             ),
         ]
+        if not vs_base.empty:
+            figs.append(
+                (
+                    f"{cfg}_pct_baseline_{short}",
+                    _by_math(
+                        vs_base,  # type: ignore
+                        f"{head} % of {baseline} {metric.unit} — {short}",
+                        lambda rows, scope, title: plot_pct(
+                            rows, scope, "pct_of_baseline", baseline, title, styles
+                        ),
+                    ),
+                )
+            )
     figs.append(
         (
             f"{cfg}_accuracy_speed",
@@ -558,11 +625,13 @@ def _sweep_section(
 
     center, whiskers = quantile_desc(df)
     table = df.sort_values(
-        ["dtype", "problem_size", "pct_of_ceiling"], ascending=[True, True, False]
+        ["dtype", "math", "problem_size", "pct_of_ceiling"],
+        ascending=[True, True, True, False],
     )[
         [
             "impl",
             "dtype",
+            "math",
             "size_label",
             "t_ms",
             metric.column,
@@ -609,7 +678,7 @@ def generate_report(
     df = load_records(logs_dir, cfg_name, run_id, gpu)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    figs: list[tuple[str, xy.Chart]] = []
+    figs: list[tuple[str, Any]] = []
     tables, sections = [], []
     for (op, cfg), g in df.groupby(["op", "cfg_name"]):  # type: ignore
         op_figs, table, md = _sweep_section(str(op), str(cfg), g, baseline)

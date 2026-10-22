@@ -14,7 +14,7 @@ class CompareResult:
 
 class Op(ABC):
     param_names: tuple[str, ...]
-    option_names: tuple[str, ...] | None
+    option_names: tuple[str, ...] | None  # keys a sweep's `options` may set
     tensor_cores: bool = False  # sets the compute ceiling, see KernelSpec.math
 
     @property

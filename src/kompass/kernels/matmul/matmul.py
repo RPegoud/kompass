@@ -1,4 +1,4 @@
-from typing import Literal, cast
+from typing import Literal
 
 import torch
 import triton
@@ -74,8 +74,8 @@ def matmul_tiled_fwd(
     z_desc.store([m_offset, n_offset], z_acc)
 
 
-def matmul_tiled_triton(
-    X: torch.Tensor, Y: torch.Tensor, input_precision: Literal["ieee", "tf32"]
+def matmul_triton_tiled(
+    X: torch.Tensor, Y: torch.Tensor, input_precision: Literal["ieee", "tf32"] = "ieee"
 ) -> torch.Tensor:
     _check_matmul_inputs(X, Y)
     M, K = X.shape
@@ -110,14 +110,6 @@ def matmul_tiled_triton(
     )
 
     return Z
-
-
-def matmul_triton_tiled_ieee(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-    return matmul_tiled_triton(X, Y, input_precision="ieee")
-
-
-def matmul_triton_tiled_tf32(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:
-    return matmul_tiled_triton(X, Y, input_precision="tf32")
 
 
 # === L2 Cache Swizzle ===
@@ -193,8 +185,8 @@ def matmul_tiled_l2_swizzle_fwd(
     z_desc.store([m_offset, n_offset], z_acc)
 
 
-def matmul_tiled_l2_swizzle_triton(
-    X: torch.Tensor, Y: torch.Tensor, input_precision: Literal["ieee", "tf32"]
+def matmul_triton_tiled_l2_swizzle(
+    X: torch.Tensor, Y: torch.Tensor, input_precision: Literal["ieee", "tf32"] = "ieee"
 ) -> torch.Tensor:
     _check_matmul_inputs(X, Y)
     M, K = X.shape
@@ -232,15 +224,3 @@ def matmul_tiled_l2_swizzle_triton(
     )
 
     return Z
-
-
-def matmul_triton_tiled_l2_swizzle_ieee(
-    X: torch.Tensor, Y: torch.Tensor
-) -> torch.Tensor:
-    return matmul_tiled_l2_swizzle_triton(X, Y, input_precision="ieee")
-
-
-def matmul_triton_tiled_l2_swizzle_tf32(
-    X: torch.Tensor, Y: torch.Tensor
-) -> torch.Tensor:
-    return matmul_tiled_l2_swizzle_triton(X, Y, input_precision="tf32")

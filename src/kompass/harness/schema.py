@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,8 +30,9 @@ class BenchResult:
 @dataclass(frozen=True)
 class SweepConfig:
     """A sweep definition loaded from `cases/<config_name>.yaml`: an op, the
-    impls and dtypes to compare, and either an `axes` grid or an explicit
-    `shapes` list. Expanded by `bench` into one `Case` per combination."""
+    impls and dtypes to compare, either an `axes` grid or an explicit
+    `shapes` list, and optional kernel `options` to sweep. Expanded by `bench`
+    into one `Case` per combination."""
 
     run_id: str
     op: str
@@ -41,6 +42,7 @@ class SweepConfig:
     dtypes: list[str]
     shapes: list[dict[str, int]] | None = None
     axes: dict[str, list[int]] | None = None
+    options: dict[str, list[str]] | None = None  # e.g. {input_precision: [ieee, tf32]}
 
     def __post_init__(self):
         if bool(self.axes) == bool(self.shapes):
@@ -51,8 +53,9 @@ class SweepConfig:
 
 @dataclass()
 class Case:
-    """A single benchmark unit: one {impl, params, dtype} combination of an op,
-    with the seed and timing quantiles to use. Built from a `SweepConfig`."""
+    """A single benchmark unit: one {impl, params, dtype, options} combination
+    of an op, with the seed and timing quantiles to use. Built from a
+    `SweepConfig`."""
 
     op: str
     impl: str
@@ -60,6 +63,7 @@ class Case:
     dtype: str
     seed: int
     quantiles: tuple[float, ...]
+    options: dict[str, str] = field(default_factory=dict)  # kernel kwargs
 
 
 @dataclass()
@@ -84,6 +88,7 @@ class CaseResult:
     framework: Literal["torch", "triton", "cuda"]
     math: str  # see KernelSpec.math
     params: dict[str, int]
+    options: dict[str, str]
     dtype: str
     seed: int
     quantiles: tuple[float, ...]

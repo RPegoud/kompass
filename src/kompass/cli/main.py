@@ -94,7 +94,7 @@ def _build_run(config_name: str, device: str) -> Run:
 
     from ..harness.ops import Op
     from ..harness.schema import Case, Payload, Run, SweepConfig
-    from ..harness.utils import get_timestamp, repo_root
+    from ..harness.utils import get_timestamp, repo_root, resolve_dtype
     from ..kernels import REGISTRY
 
     run_id = uuid.uuid4().hex[:8]
@@ -135,19 +135,39 @@ def _build_run(config_name: str, device: str) -> Run:
                 f"{cfg.op} expects {param_names}, got {sorted(ps)}"
             )
 
-    grid = list(product(cfg.impls, cfg.dtypes, params_set))
-
-    cases = [
-        Case(
-            op=cfg.op,
-            impl=impl,
-            params=params,
-            dtype=dtype,
-            seed=cfg.seed,
-            quantiles=cfg.quantiles,
+    sweep_options = cfg.options or {}
+    unknown = set(sweep_options) - set(op.option_names or ())
+    if unknown:
+        raise typer.BadParameter(
+            f"{cfg.op} has options {op.option_names}, got {sorted(unknown)}"
         )
-        for impl, dtype, params in grid
-    ]
+
+    cases = []
+    for impl, dtype in product(cfg.impls, cfg.dtypes):
+        spec = REGISTRY[cfg.op].impls[impl]
+        names = [n for n in spec.option_names if n in sweep_options]
+        combos = [
+            dict(zip(names, values))
+            for values in product(*(sweep_options[n] for n in names))
+        ]
+        # Options that don't change the arithmetic on this dtype (e.g. tf32 on
+        # bf16 inputs) would rerun the same kernel: keep one per `math`.
+        by_math = {}
+        for options in combos:
+            by_math.setdefault(spec.math(resolve_dtype(dtype), options), options)
+        cases += [
+            Case(
+                op=cfg.op,
+                impl=impl,
+                params=params,
+                dtype=dtype,
+                seed=cfg.seed,
+                quantiles=cfg.quantiles,
+                options=options,
+            )
+            for options in by_math.values()
+            for params in params_set
+        ]
 
     payload = Payload(
         run_id=run_id,
@@ -356,6 +376,13 @@ def profile(
             help="Op parameters, repeated option. Example: -p batch=64 -p seqlen=4096",
         ),
     ],
+    o: Annotated[
+        list[str] | None,
+        typer.Option(
+            "-o",
+            help="Kernel options, repeated option. Example: -o input_precision=tf32",
+        ),
+    ] = None,
     dtype: Annotated[str, typer.Option("--dtype")] = "float32",
     device: Annotated[str, typer.Option("--device")] = "cuda:0",
     seed: Annotated[int, typer.Option("--seed")] = 0,
@@ -379,8 +406,13 @@ def profile(
         resolve_impl,
     )
 
-    op, _ = resolve_impl(registry_key)
+    op, spec = resolve_impl(registry_key)
     params = parse_params(p, expected=op.param_names)
+    options = dict(kv.split("=", 1) for kv in o or [])
+    if unknown := set(options) - set(spec.option_names):
+        raise typer.BadParameter(
+            f"{registry_key} accepts options {spec.option_names}, got {sorted(unknown)}"
+        )
     op_key, _, impl_suffix = registry_key.partition("/")
     ts = get_timestamp()
 
@@ -395,6 +427,7 @@ def profile(
                 "op": op_key,
                 "impl": impl_suffix,
                 "params": params,
+                "options": options,
                 "dtype": dtype,
                 "device": device,
                 "seed": seed,
@@ -437,8 +470,13 @@ def report(
             help="The configuration name, as defined in `src/kompass/cases/*.yaml`, e.g. `vec_add_sweep`.",
         ),
     ] = None,
-    run_id: Annotated[str | None, typer.Option("--run-id")] = None,
-    gpu: Annotated[str | None, typer.Option("--gpu")] = None,
+    run_id: Annotated[
+        str | None,
+        typer.Option("--run-id", help="The specific `run_id` to filter for."),
+    ] = None,
+    gpu: Annotated[
+        str | None, typer.Option("--gpu", help="The specific `gpu` to filter for.")
+    ] = None,
     baseline: Annotated[
         str | None,
         typer.Option(

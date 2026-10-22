@@ -28,7 +28,7 @@ After `uv sync`, all endpoints are available through the `kompass` entry point.
 | --- | --- |
 | `kompass list` | Prints every registered Op and its implementations. |
 | `kompass bench <config_name> [<config_name> ...] [--backend local\|modal:<gpu>] [--device cuda:0]` | Runs one or more sweeps: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. Sweeps run one after another locally, and in parallel on Modal (one GPU each). A failed sweep doesn't stop the others; `bench` exits with code 1 if any failed. |
-| `kompass profile <op>/<impl> -p K=V [-p K=V ...] [--dtype float32] [--set full\|roofline\|detailed]` | Profiles one case under `ncu`, then ingests the report automatically. |
+| `kompass profile <op>/<impl> -p K=V [-p K=V ...] [-o K=V ...] [--dtype float32] [--set full\|roofline\|detailed]` | Profiles one case under `ncu`, then ingests the report automatically. `-o` sets kernel options, e.g. `-o input_precision=tf32`. |
 | `kompass ingest <reports/.../report.ncu-rep>` | Parses an existing Nsight Compute report into `records.jsonl` (`profile` calls this for you). |
 | `kompass report [--config <config_name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<config_name>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. One section per sweep (op + config), so sweeps of the same op never share an axis; each baseline defaults to the op's `torch` impl. |
 
@@ -319,6 +319,18 @@ REGISTRY: dict[str, OpEntry] = {
 ```
 
 Name impls `<op>_<suffix>` so that `kompass profile <op>/<suffix>` can find them.
+
+If a launcher takes keyword arguments that a sweep should vary, register one impl and list them in
+`option_names` instead of registering one impl per value. Each name must also be in the Op's
+`option_names`:
+
+```python
+# kernels/matmul/__init__.py
+matmul_triton_tiled = MatmulSpec(
+    loader=TritonLoader(module_path=f"{__package__}.matmul", fn_name="matmul_triton_tiled"),
+    option_names=("input_precision",),         # matmul_triton_tiled(X, Y, input_precision="ieee")
+)
+```
 For a new Op, also merge its registry into the global one in
 [kernels/\_\_init\_\_.py](src/kompass/kernels/__init__.py):
 
@@ -343,6 +355,14 @@ in one of two ways, and a config must use exactly one of them:
 
 Every parameter set must define exactly the Op's `param_names`. Otherwise `bench` exits with an error.
 
+**`options`** (optional) sweeps kernel keyword arguments, e.g. `input_precision: [ieee, tf32]` for matmul.
+Keys must be in the Op's `option_names`. Each impl runs every combination of the options it declares
+in its `KernelSpec(option_names=...)`; impls that declare none run once. `matmul_torch` declares
+`input_precision` too, so each precision is compared against torch running the same arithmetic.
+Combinations that don't change the arithmetic on a dtype run once: `tf32` only affects float32
+inputs, so bf16 runs each matmul kernel once. The report puts each arithmetic (`float32`, `tf32`, ...)
+in its own panel, side by side on the same page.
+
 ```yaml
 # src/kompass/cases/softmax_occupancy.yaml (grid via `axes`)
 op: softmax
@@ -358,7 +378,9 @@ quantiles: [0.2, 0.5, 0.8] # passed to do_bench
 ```yaml
 # src/kompass/cases/matmul_square.yaml (explicit combinations via `shapes`)
 op: matmul
-impls: [matmul_triton_tiled_ieee, matmul_triton_tiled_tf32, matmul_torch]
+impls: [matmul_triton_tiled, matmul_torch]
+options:
+  input_precision: [ieee, tf32] # float32 only: bf16 runs once per impl
 shapes:
   - { M: 1024, N: 1024, K: 1024 }
   - { M: 4096, N: 4096, K: 4096 }

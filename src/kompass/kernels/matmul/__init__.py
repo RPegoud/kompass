@@ -74,49 +74,49 @@ class Matmul(Op):
         return 2 * M * N * K
 
 
-MatmulSpec = partial(KernelSpec(op=Matmul()))
+def matmul(
+    X: torch.Tensor, Y: torch.Tensor, input_precision: str = "ieee"
+) -> torch.Tensor:
+    """`torch.matmul` with float32 inputs multiplied as `input_precision`.
+    cuBLAS reads it from a global flag, so it is set and restored around the call."""
+    flags = torch.backends.cuda.matmul
+    prev = flags.fp32_precision
+    flags.fp32_precision = input_precision
+    try:
+        return torch.matmul(X, Y)
+    finally:
+        flags.fp32_precision = prev
 
-matmul_torch = MatmulSpec(loader=TorchLoader(fn=torch.matmul))
 
-matmul_triton_tiled_ieee = MatmulSpec(
-    loader=TritonLoader(
-        module_path=f"{__package__}.matmul",
-        fn_name="matmul_triton_tiled_ieee",
-        supports_backward=False,
-    ),
+MatmulSpec = partial(KernelSpec, op=Matmul())
+
+matmul_torch = MatmulSpec(
+    loader=TorchLoader(fn=matmul), option_names=("input_precision",)
 )
-matmul_triton_tiled_tf32 = MatmulSpec(
+
+matmul_triton_tiled = MatmulSpec(
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
-        fn_name="matmul_triton_tiled_tf32",
+        fn_name="matmul_triton_tiled",
         supports_backward=False,
     ),
-    precision="tf32",
+    option_names=("input_precision",),
 )
-matmul_triton_tiled_l2_swizzle_ieee = MatmulSpec(
+matmul_triton_tiled_l2_swizzle = MatmulSpec(
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
-        fn_name="matmul_triton_tiled_l2_swizzle_ieee",
+        fn_name="matmul_triton_tiled_l2_swizzle",
         supports_backward=False,
     ),
-)
-matmul_triton_tiled_l2_swizzle_tf32 = MatmulSpec(
-    loader=TritonLoader(
-        module_path=f"{__package__}.matmul",
-        fn_name="matmul_triton_tiled_l2_swizzle_tf32",
-        supports_backward=False,
-    ),
-    precision="tf32",
+    option_names=("input_precision",),
 )
 
 REGISTRY: dict[str, OpEntry] = {
     "matmul": OpEntry(
         op=Matmul(),
         impls={
-            "matmul_triton_tiled_ieee": matmul_triton_tiled_ieee,
-            "matmul_triton_tiled_tf32": matmul_triton_tiled_tf32,
-            "matmul_triton_tiled_l2_swizzle_ieee": matmul_triton_tiled_l2_swizzle_ieee,
-            "matmul_triton_tiled_l2_swizzle_tf32": matmul_triton_tiled_l2_swizzle_tf32,
+            "matmul_triton_tiled": matmul_triton_tiled,
+            "matmul_triton_tiled_l2_swizzle": matmul_triton_tiled_l2_swizzle,
             "matmul_torch": matmul_torch,
         },
     )

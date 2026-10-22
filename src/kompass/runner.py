@@ -96,6 +96,7 @@ def run_bench(
                     device=device,
                     seed=case.seed,
                     quantiles=case.quantiles,
+                    options=case.options,
                 )
 
             except ValueError as e:  # correctness error
@@ -117,8 +118,9 @@ def run_bench(
             op=case.op,
             impl=case.impl,
             framework=spec.loader.framework,
-            math=spec.math(dtype),
+            math=spec.math(dtype, case.options),
             params=case.params,
+            options=case.options,
             dtype=str(dtype),
             seed=case.seed,
             times=case_times,
