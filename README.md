@@ -8,13 +8,16 @@
 
 **Kompass is a tooling suite for GPU kernel development.** It gives you one harness to
 **test, benchmark, tune and profile** CUDA, Triton and PyTorch implementations of the same
-operation side by side, and to turn the results into a report. Runs can happen on your local GPU or on a cloud GPU through
-[Modal](https://modal.com).
+operation side by side, and to turn the results into a report. Runs can happen on your local GPU, or fan
+out over many cloud GPUs in parallel through [Modal](https://modal.com).
 
 You describe an **Op** once (how to build inputs, a reference result, a correctness check,
 and FLOP/byte counts). You then register any number of **implementations** of it. 
 
 Kompass:
+- **Runs in parallel on Modal**: `bench` gives each sweep its own GPU, and `tune` splits its search into one job
+  per kernel, precision and shape, spread over as many GPUs as your plan allows, with a live progress row per GPU.
+  Tuning two matmul sweeps (23k configs) takes about 7 minutes on 10 H100s.
 - **JIT-compiles** CUDA extensions per GPU architecture and source hash, and imports Triton kernels lazily.
 - **Gates every benchmark on correctness**: a kernel whose output doesn't match the reference is never timed.
 - **Sweeps** parameter grids from a YAML file and records each case's status (`ok`, `incorrect`, `oom`, `skipped_oom`, `failed`).
@@ -29,6 +32,11 @@ Kompass:
 ---
 
 ## 📊 Results on an H100
+
+> [!NOTE]
+> **All of this ran in parallel on 10 Modal H100s.** `kompass tune` searched 23,328 configs across the two matmul
+> sweeps (8,344 pruned before compiling, the rest compiled and timed) in about 7 minutes, for about $4.
+> Each benchmark run then took about a minute.
 
 Two Triton matmul kernels, a tiled one and the same with an L2-cache swizzle, against torch (cuBLAS).
 Each was tuned with `kompass tune`, then benchmarked with its default and tuned configs side by side
