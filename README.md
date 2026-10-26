@@ -3,8 +3,8 @@
 <a href="Kompass.png?raw=true"><img src="Kompass.png?raw=true" width="200" align="right" /></a>
 
 **Kompass is a tooling suite for GPU kernel development.** It gives you one harness to
-**test, benchmark and profile** CUDA, Triton and PyTorch implementations of the same
-operation side by side. Runs can happen on your local GPU or on a cloud GPU through
+**test, benchmark, tune and profile** CUDA, Triton and PyTorch implementations of the same
+operation side by side, and to turn the results into a report. Runs can happen on your local GPU or on a cloud GPU through
 [Modal](https://modal.com).
 
 You describe an **Op** once (how to build inputs, a reference result, a correctness check,
@@ -15,6 +15,10 @@ Kompass:
 - **Gates every benchmark on correctness**: a kernel whose output doesn't match the reference is never timed.
 - **Sweeps** parameter grids from a YAML file and records each case's status (`ok`, `incorrect`, `oom`, `skipped_oom`, `failed`).
 - **Measures copy bandwidth** on the target GPU, so results can be compared against an achievable roofline.
+- **Tunes** each kernel's launch parameters (block sizes, warps, stages, ...) per GPU and problem shape, and
+  benchmarks with the best config found, or with and without it side by side.
+- **Reports** each sweep as plots (throughput, % of ceiling, % of baseline, roofline, tuning gain) and a results
+  table, judging every case against the vendor peak of the arithmetic it runs.
 - **Profiles** a single case under Nsight Compute and turns the `.ncu-rep` into flat JSONL records.
 - Stamps every run with the git commit (`-dirty` if there are uncommitted changes) and the GPU, driver and CUDA versions, so results stay reproducible.
 
@@ -27,10 +31,12 @@ After `uv sync`, all endpoints are available through the `kompass` entry point.
 | Command | What it does |
 | --- | --- |
 | `kompass list` | Prints every registered Op and its implementations. |
-| `kompass bench <config_name> [<config_name> ...] [--backend local\|modal:<gpu>] [--device cuda:0]` | Runs one or more sweeps: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. Sweeps run one after another locally, and in parallel on Modal (one GPU each). A failed sweep doesn't stop the others; `bench` exits with code 1 if any failed. |
+| `kompass runs [--op <op>] [--config <config_name>] [--n 20]` | Lists the most recent runs in `logs/`. |
+| `kompass bench <config_name> [<config_name> ...] [--backend local\|modal:<gpu>] [--device cuda:0] [--tuning tuned\|untuned\|both]` | Runs one or more sweeps: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. Sweeps run one after another locally, and in parallel on Modal (one GPU each). A failed sweep doesn't stop the others; `bench` exits with code 1 if any failed. `--tuning` (default `tuned`) uses the configs saved by `tune` for the GPU it runs on; `both` also runs each tuned case with the launcher defaults, in the same run. |
+| `kompass tune <config_name> [<config_name> ...] [--backend local\|modal:<gpu>]` | Searches each tunable impl's `search_space` on the sweep's cases (see [Make it tunable](#-6-make-it-tunable)) and saves the fastest config per case to `src/kompass/tuning/<gpu>/<impl>.json`. Each config is timed briefly, then the 5 fastest per case are re-timed in full on the same GPU. On Modal, every (impl, precision, shape) group is its own input, spread over up to `max_containers` GPUs, costliest first. |
 | `kompass profile <op>/<impl> -p K=V [-p K=V ...] [-o K=V ...] [--dtype float32] [--set full\|roofline\|detailed]` | Profiles one case under `ncu`, then ingests the report automatically. `-o` sets kernel options, e.g. `-o input_precision=tf32`. |
 | `kompass ingest <reports/.../report.ncu-rep>` | Parses an existing Nsight Compute report into `records.jsonl` (`profile` calls this for you). |
-| `kompass report [--config <config_name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<config_name>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. One section per sweep (op + config), so sweeps of the same op never share an axis; each baseline defaults to the op's `torch` impl. |
+| `kompass report [--config <config_name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<config_name>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. Uses the newest `bench` run of each sweep, one section per sweep (op + config), so sweeps of the same op never share an axis; each baseline defaults to the op's `torch` impl. Arithmetics that share a dtype (e.g. `float32` and `tf32`) get side-by-side panels, and tuned runs appear as `<impl> (tuned)` with a tuning-gain plot. |
 
 ### 💡 Examples
 
@@ -50,6 +56,11 @@ kompass bench vec_add_sweep --backend modal:h100
 # Two sweeps in parallel, each on its own Modal H100
 kompass bench vec_add_sweep matmul_square --backend modal:h100
 
+# Tune the matmul kernels, then compare tuned and default configs in one run
+kompass tune matmul_square matmul_k_sweep --backend modal:h100
+kompass bench matmul_square --backend modal:h100 --tuning both
+kompass report --config matmul_square
+
 # Profile a single case. The key is <op>/<impl suffix>: `vec_add/triton` -> `vec_add_triton`
 kompass profile vec_add/triton -p N=16777216 --dtype float32 --set full
 ```
@@ -63,15 +74,27 @@ kompass profile vec_add/triton -p N=16777216 --dtype float32 --set full
 ```
 logs/<timestamp>__<op>__<run_id>/   # bench
 ├── meta.json        # run config, GPU/driver/nvcc info, measured copy bandwidth, git commit (or `error` if the sweep failed)
-└── times.jsonl      # one row per case (times at each quantile, flops, bytes, status, memory)
+└── times.jsonl      # one row per case (times at each quantile, flops, bytes, status, memory, tuning used)
+
+logs/<timestamp>__<op>__<run_id>/   # tune (kind: "tune", ignored by `report`)
+├── meta.json        # pruned configs with their reason, failed groups
+└── times.jsonl      # one row per trial, with its `tuning` and `stage` (1: short pass, 2: re-timed finalists)
+
+src/kompass/tuning/<gpu>/<impl>.json   # tune: best config per (dtype, options, shape), read by bench
 
 logs/<timestamp>__<op>__<uid>/      # profile (ingest)
 ├── meta.json
 └── records.jsonl    # one row per kernel launch (duration, DRAM bytes, %DRAM / %SM of peak)
 
-reports/<op>_<impl>/<uid>/
+reports/<op>_<impl>/<uid>/          # profile
 ├── meta.json
 └── report.ncu-rep   # open in Nsight Compute UI
+
+reports/<config_name>/              # report
+├── summary.md       # per-sweep results table + embedded plots
+├── summary.csv
+├── plots/*.png
+└── report.pdf       # every plot, one per page
 ```
 
 Every row is flat: params appear as `param_<name>` columns. That makes loading a run a
@@ -93,18 +116,22 @@ one-liner, e.g. `pd.read_json("logs/.../times.jsonl", lines=True)`.
 ├── logs/                       # bench / profile records (generated)
 ├── reports/                    # ncu reports (generated)
 └── src/kompass/
-    ├── cli/main.py             # Typer app: list, runs, bench, profile, ingest, report
-    ├── runner.py               # run_bench(): copy-bandwidth probe, per-case memory check, bench loop; run_local()
+    ├── cli/main.py             # Typer app: list, runs, bench, tune, profile, ingest, report
+    ├── runner.py               # run_bench(), run_tune() (two-pass search with early abort), run_local()
     ├── infra/
-    │   └── modal_runner.py     # Modal app/image/volumes wrapping run_bench; run_modal() dispatches sweeps in parallel
+    │   ├── modal_cfg.yaml      # volumes, max_containers, timeout
+    │   └── modal_runner.py     # Modal app/image/volumes; run_modal() dispatches payloads in parallel, with progress
     ├── harness/
     │   ├── ops.py              # Op ABC: reference, compare, make_inputs, bytes_moved, flops
     │   ├── loaders.py          # TorchLoader, TritonLoader, CudaLoader (JIT, per-arch cache)
     │   ├── spec.py             # KernelSpec = Op + Loader; test() and bench()
     │   ├── registry.py         # OpEntry(op, impls)
     │   ├── schema.py           # plain dataclasses: SweepConfig, Case, Payload, CaseResult, ProfileRecord
+    │   ├── tuning.py           # save / load / apply the configs found by `tune`
+    │   ├── report.py           # records -> plots, tables, PDF; vendor peaks per GPU
     │   ├── profile.py          # child process launched under ncu (warmup + profiled call)
     │   └── utils.py            # env description, impl/dtype resolution, git commit, ...
+    ├── tuning/<gpu>/<impl>.json # best configs found by `tune` (commit them)
     ├── cases/                  # sweep definitions (*.yaml)
     │   ├── vec_add_sweep.yaml
     │   ├── softmax_occupancy.yaml
@@ -161,6 +188,11 @@ kompass bench vec_add_sweep --backend modal:t4
 
 The Modal image is built from the same `Dockerfile`, so local and remote runs share one
 environment. `modal:h100` is pinned to `H100!` so that Modal doesn't silently upgrade it to an H200.
+Other requests can still be upgraded (e.g. `A100-40GB` may run on an 80GB card): records and tuned
+configs are keyed on the device name the container reports, never on the requested GPU.
+
+[infra/modal_cfg.yaml](src/kompass/infra/modal_cfg.yaml) sets the cache volumes, `max_containers`
+(the number of GPUs used at once, 10 on Modal's free plan) and the per-call `timeout`.
 
 > [!TIP]
 > If `ncu-check` reports `ERR_NVGPUCTRPERM`, the host doesn't expose GPU performance counters.
@@ -401,6 +433,52 @@ kompass bench vec_add_sweep                               # correctness-gated be
 kompass profile vec_add/cuda -p N=16777216                # Nsight Compute deep dive
 ```
 
+### 🔧 6. Make it tunable
+
+To let `tune` search a kernel's launch parameters:
+
+1. Have the launcher take them as keyword arguments, with the defaults `bench` uses when no tuned
+   config exists.
+2. Give its `KernelSpec` a `search_space` (one list of values per keyword) and, optionally, a `prune`
+   hook that rejects configs before they're compiled.
+
+```python
+# kernels/matmul/matmul.py
+def matmul_triton_tiled(X, Y, BLOCK_SIZE_M=128, BLOCK_SIZE_N=128, BLOCK_SIZE_K=64,
+                        num_stages=3, num_warps=8, input_precision="ieee"): ...
+
+# kernels/matmul/__init__.py
+def prune_matmul_config(params, tuning, dtype, limits) -> tuple[bool, str | None]:
+    """(skip, reason). `limits` is the worker's describe_env(), e.g. its shared memory."""
+    t = tuning
+    smem = t["num_stages"] * (t["BLOCK_SIZE_M"] + t["BLOCK_SIZE_N"]) * t["BLOCK_SIZE_K"] * dtype.itemsize
+    if smem > 0.9 * limits["shared_memory_per_block_optin"]:
+        return True, f"needs ~{smem // 1024}KB of shared memory"
+    return False, None
+
+matmul_triton_tiled = MatmulSpec(
+    loader=TritonLoader(module_path=f"{__package__}.matmul", fn_name="matmul_triton_tiled"),
+    option_names=("input_precision",),
+    search_space={
+        "BLOCK_SIZE_M": [64, 128, 256], "BLOCK_SIZE_N": [64, 128, 256], "BLOCK_SIZE_K": [32, 64, 128],
+        "num_warps": [4, 8], "num_stages": [2, 3, 4],
+    },
+    prune=prune_matmul_config,
+)
+```
+
+`tune` runs the sweep's cases once per config in the grid:
+
+- **Pass 1** times every config briefly. A config whose first call is already more than 3× slower than
+  the best one found so far (and over 1 ms) is recorded as `slow` and not timed in full.
+- **Pass 2** re-times the 5 fastest configs per case, on the same GPU.
+- **Failures don't stop the run:** configs that exceed the GPU's shared memory get status `oom_smem`,
+  and wrong results get `incorrect`; both are recorded like any other case.
+
+Tuned configs are specific to a GPU and a shape, and `bench` only uses a config saved for the exact
+same dtype, options and shape. Commit the files in `src/kompass/tuning/` to share them: the Modal image
+ships them with the code.
+
 ---
 
 ## 💬 Tips
@@ -415,6 +493,7 @@ kompass profile vec_add/cuda -p N=16777216                # Nsight Compute deep 
 
 ## 🗺️ Roadmap
 
-- [ ] `Tune` endpoint, takes an op/impl with a single set of parameters and returns the tuned block sizes and number of warps.
-- [x] `Report` endpoint, filters impl records for a specific device and returns an `.md` file with a detailed performance report and a roofline plot.
-- [ ] Adding support for `Pallas` (JAX) and/or `CuteDSL` kernels.
+- [ ] Add support for:
+  - [ ] Torch Inductor (`torch.compile()`)
+  - [ ] CuTe DSL
+  - [ ] JAX Jitted scripts
