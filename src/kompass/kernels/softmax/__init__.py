@@ -73,6 +73,29 @@ class Softmax(Op):
         return params["M"] * params["N"] * 3
 
 
+def prune_softmax_config(
+    params: dict[str, int],
+    tuning: dict[str, int],
+    dtype: torch.dtype,
+    limits: dict[str, int],
+) -> tuple[bool, str | None]:
+    """Shared memory is never the limit: a program holds one row (or one
+    block of it) in registers. Only skip wasted blocks."""
+    from triton import next_power_of_2
+
+    block = tuning.get("BLOCK_SIZE")
+    if block is None:  # single-block: the block is the whole row
+        return False, None
+    if block > next_power_of_2(params["N"]):
+        return True, f"BLOCK_SIZE {block} > next_power_of_2(N={params['N']})"
+    if block < 32 * tuning["num_warps"]:
+        return (
+            True,
+            f"BLOCK_SIZE {block} leaves threads of {tuning['num_warps']} warps idle",
+        )
+    return False, None
+
+
 SoftmaxSpec = partial(KernelSpec, op=Softmax())
 
 softmax_triton_single_block = SoftmaxSpec(
@@ -81,6 +104,8 @@ softmax_triton_single_block = SoftmaxSpec(
         fn_name="softmax_triton_single_block",
         supports_backward=False,
     ),
+    search_space={"num_warps": [4, 8, 16, 32]},
+    prune=prune_softmax_config,
 )
 softmax_triton_online = SoftmaxSpec(
     loader=TritonLoader(
@@ -88,6 +113,12 @@ softmax_triton_online = SoftmaxSpec(
         fn_name="softmax_triton_online",
         supports_backward=False,
     ),
+    search_space={
+        "num_warps": [4, 8, 16],
+        "num_stages": [2, 3, 4],
+        "BLOCK_SIZE": [128, 256, 512, 1024, 2048, 4096, 8192],
+    },
+    prune=prune_softmax_config,
 )
 softmax_torch = SoftmaxSpec(
     loader=TorchLoader(torch.softmax, options={"dim": -1}),

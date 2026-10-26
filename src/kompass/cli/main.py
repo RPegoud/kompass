@@ -196,12 +196,18 @@ def bench(
         str, typer.Option(help="Either `local` or `modal:gpu`, e.g. `modal:h100`")
     ] = "local",
     device: str = "cuda:0",
+    tuning: Annotated[
+        Literal["tuned", "untuned", "both"],
+        typer.Option(
+            help="Run cases with the configs saved by `kompass tune` for this GPU "
+            "(where they exist), with the launcher defaults, or both side by side.",
+        ),
+    ] = "tuned",
 ):
     """Run one or more sweeps, each benchmarking one Op against multiple `Cases`
     ({impl, shape, dtype} tuples)."""
     import json
     from collections import Counter
-    from functools import partial
 
     from rich.progress import (
         BarColumn,
@@ -213,28 +219,23 @@ def bench(
     )
 
     from ..harness.utils import git_commit
+    from ..kernels import REGISTRY
+    from ..runner import select_runner
 
     runs = [_build_run(config_name, device) for config_name in config_names]
+    for run in runs:
+        run.payload.tuning_mode = tuning
+    runner = select_runner(backend, kind="bench")
 
-    if backend == "local":
-        from ..runner import run_local
-
-        runner = run_local
-
-    elif backend.startswith("modal:"):
-        *_, gpu = backend.partition(":")
-        gpu = gpu.upper()
-        if gpu == "H100":
-            gpu += "!"  # `!` prevents automatic upgrades to H200
-
-        from ..infra.modal_runner import run_modal
-
-        runner = partial(run_modal, gpu=gpu)
-
-    else:
-        raise typer.BadParameter(
-            f"Expected backend format `modal:gpu`, e.g. `modal:h100`, got {backend}"
-        )
+    def n_cases(run: Run) -> int:
+        """With `both`, tunable cases run twice, assuming each has a saved config."""
+        n = len(run.payload.cases)
+        if tuning == "both":
+            n += sum(
+                REGISTRY[c.op].impls[c.impl].search_space is not None
+                for c in run.payload.cases
+            )
+        return n
 
     with Progress(
         SpinnerColumn(),
@@ -242,17 +243,16 @@ def bench(
         BarColumn(bar_width=30, style="dim", complete_style="green"),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
-        # transient=True,
     ) as progress:
         tasks = {
             run.run_id: progress.add_task(
-                f"{run.config_name} ({run.run_id})", total=len(run.payload.cases)
+                f"{run.config_name} ({run.run_id})", total=n_cases(run)
             )
             for run in runs
         }
         results = runner(
             [run.payload for run in runs],
-            on_case_done=lambda run_id: progress.advance(tasks[run_id]),
+            on_case_done=lambda run_id, _worker: progress.advance(tasks[run_id]),
         )
 
     git = git_commit()
@@ -264,7 +264,7 @@ def bench(
             summary = f"failed: {meta['error']}"
             n_failed += 1
         else:
-            meta, times = result.meta, result.times
+            meta, times = result.meta, result.case_results
             summary = dict(Counter(r["status"] for r in times))
             for row in times:  # flatten params dict to "param_{name}"
                 params = row.pop("params")
@@ -301,6 +301,182 @@ def bench(
         typer.echo(f"{n_failed}/{len(runs)} sweeps failed.", err=True)
         raise typer.Exit(1)
     typer.echo("Run complete!")
+
+
+@app.command()
+def tune(
+    config_names: Annotated[
+        list[str],
+        typer.Argument(
+            help="The configuration name(s), as defined in `src/kompass/cases/*.yaml`, e.g. `vec_add_sweep matmul_k_sweep`."
+        ),
+    ],
+    backend: Annotated[
+        str, typer.Option(help="Either `local` or `modal:gpu`, e.g. `modal:h100`")
+    ] = "local",
+    device: str = "cuda:0",
+) -> None:
+    """Search each tunable impl's `search_space` on the sweep's cases and save
+    the fastest config per case to `src/kompass/tuning/<gpu>/<impl>.json`."""
+    import json
+    from collections import Counter, defaultdict
+    from dataclasses import replace
+    from itertools import product
+
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TaskID,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
+    from ..harness import tuning
+    from ..harness.schema import BenchResult, Case, Payload
+    from ..harness.utils import git_commit, repo_root, resolve_dtype
+    from ..kernels import REGISTRY
+    from ..runner import select_runner
+
+    # 1. build the sweep: `build_runs` + expand with the hparams grid, one group
+    # (one Modal input) per impl/math/dtype/shape. Small inputs spread over every
+    # container and bound what a timeout loses; compiles are cheap next to slow
+    # shapes. The costliest shapes go first, since Modal starts inputs in order.
+    runs = [_build_run(config_name, device) for config_name in config_names]
+    groups: list[tuple[Run, Payload]] = []
+    labels: dict[str, str] = {}  # group payload id -> what it tunes
+    for run in runs:
+        cases: list[Case] = run.payload.cases
+        by_group: dict[tuple, list[Case]] = defaultdict(list)
+        for case in cases:
+            spec = REGISTRY[case.op].impls[case.impl]
+            search_space = spec.search_space
+
+            if search_space is None:  # ignore impls with no search space
+                continue
+
+            m = spec.math(resolve_dtype(case.dtype), case.options)
+            for param_set in product(*search_space.values()):
+                shape = tuple(sorted(case.params.items()))
+                by_group[(case.impl, m, case.dtype, shape)].append(
+                    replace(
+                        case,
+                        tuning={
+                            name: value
+                            for (name, value) in zip(search_space, param_set)
+                        },
+                    )
+                )
+        for i, ((impl, m, dtype, shape), cs) in enumerate(by_group.items()):
+            group = replace(run.payload, cases=cs, run_id=f"{run.run_id}.{i}")
+            sizes = "x".join(str(v) for _, v in shape)
+            precision = dtype if m == dtype else f"{dtype}/{m}"  # e.g. float32/tf32
+            short = impl.removeprefix(f"{run.payload.op}_")
+            labels[group.run_id] = f"{run.config_name}: {short} {precision} {sizes}"
+            groups.append((run, group))
+    groups.sort(
+        key=lambda g: REGISTRY[g[1].op].op.flops(g[1].cases[0].params), reverse=True
+    )
+
+    runner = select_runner(backend, kind="tune")
+
+    # 2. coarse run over the whole tuning grid
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}", style="dim"),
+        BarColumn(bar_width=30, style="dim", complete_style="green"),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    ) as progress:
+        tasks = {
+            run.run_id: progress.add_task(
+                f"{run.config_name} ({run.run_id})",
+                total=sum(len(p.cases) for r, p in groups if r is run),
+            )
+            for run in runs
+        }
+        run_of = {p.run_id: r.run_id for r, p in groups}
+        size_of = {p.run_id: len(p.cases) for _, p in groups}
+        # One row per container, showing the group it is working through.
+        worker_rows: dict[str, TaskID] = {}
+        current: dict[str, str] = {}  # worker -> group payload id
+
+        def on_case_done(group_id: str, worker: str) -> None:
+            progress.advance(tasks[run_of[group_id]])
+            if worker not in worker_rows:
+                worker_rows[worker] = progress.add_task("", total=size_of[group_id])
+            if current.get(worker) != group_id:
+                current[worker] = group_id
+                progress.reset(
+                    worker_rows[worker],
+                    total=size_of[group_id],
+                    description=f"  gpu {list(worker_rows).index(worker) + 1} · "
+                    f"{labels[group_id]}",
+                )
+            progress.advance(worker_rows[worker])
+
+        results: list[BenchResult | BaseException] = runner(
+            [payload for (_, payload) in groups], on_case_done=on_case_done
+        )
+
+    # 3. save the best configs, then write each run's groups as one log
+    git = git_commit()
+    saved: set[Path] = set()
+    rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    pruned: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    errors: dict[str, list[str]] = defaultdict(list)
+    for (run, _), result in zip(groups, results):
+        if isinstance(result, BaseException):
+            errors[run.run_id].append(repr(result))
+            continue
+        device_name = str(result.env["device_name"])
+        saved.update(tuning.save(result.case_results, device_name, run.run_id, git))
+        pruned[run.run_id] += result.meta["pruned"]
+        for row in result.case_results:  # flatten params dict to "param_{name}"
+            params = row.pop("params")
+            for p_name, p_value in params.items():
+                row[f"param_{p_name}"] = p_value
+            row |= result.env
+            row |= {
+                "cfg_name": run.config_name,
+                "run_id": run.run_id,
+                "kind": "tune",
+                "git_commit": git,
+            }
+        rows[run.run_id] += result.case_results
+
+    for run in runs:
+        meta = {
+            "cfg_name": run.config_name,
+            "run_id": run.run_id,
+            "timestamp": run.timestamp,
+            "kind": "tune",
+            "git_commit": git,
+            "pruned": pruned[run.run_id],
+            "errors": errors[run.run_id],
+        }
+        run.output_dir.mkdir(parents=True, exist_ok=True)
+        with open(run.output_dir / "meta.json", "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        with open(run.output_dir / "times.jsonl", "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(row) + "\n" for row in rows[run.run_id])
+
+        summary = dict(Counter(r["status"] for r in rows[run.run_id]))
+        if errors[run.run_id]:
+            summary["failed groups"] = len(errors[run.run_id])
+        typer.echo(f"{run.config_name} ({run.run_id}): {summary}")
+
+    root = repo_root()
+    for path in sorted(saved):
+        shown = path.relative_to(root) if path.is_relative_to(root) else path
+        typer.echo(f"saved best configs to {shown}")
+
+    n_failed = sum(map(len, errors.values()))
+    if n_failed:
+        typer.echo(f"{n_failed}/{len(groups)} tuning groups failed.", err=True)
+        raise typer.Exit(1)
+    typer.echo("Tuning complete!")
 
 
 @app.command()

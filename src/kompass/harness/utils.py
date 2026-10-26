@@ -28,6 +28,7 @@ def describe_env() -> dict[str, str | int | None]:
 
     m = re.search(r"release (\d+\.\d+), V(\S+)", _sh("nvcc", "--version"))
     nvcc = m.group(2) if m else "unknown"
+    props = torch.cuda.get_device_properties(0)
 
     return {
         "nvidia_smi": _sh(
@@ -40,6 +41,9 @@ def describe_env() -> dict[str, str | int | None]:
         "device_count": torch.cuda.device_count(),
         "device_capability": ".".join(map(str, torch.cuda.get_device_capability(0))),
         "torch_cuda_version": torch.version.cuda,
+        # what one block may use once it opts in (Triton does): the tuning limit
+        "shared_memory_per_block_optin": props.shared_memory_per_block_optin,
+        "regs_per_multiprocessor": props.regs_per_multiprocessor,
     }
 
 
@@ -67,6 +71,7 @@ def resolve_impl(name: str) -> tuple[Op, KernelSpec]:
 
 def resolve_dtype(dtype: torch.dtype | str) -> torch.dtype:
     import torch
+
     if not isinstance(dtype, torch.dtype):
         dtype = getattr(torch, dtype)
         assert isinstance(dtype, torch.dtype), (

@@ -36,7 +36,7 @@
       }
     }
   },
-  "postCreateCommand": "uv sync --frozen && nvcc --version",
+  "postCreateCommand": "uv sync --frozen && kompass --install-completion bash && nvcc --version",
   "containerEnv": {
     "UV_LINK_MODE": "copy",
     "CLAUDE_CONFIG_DIR": "/home/vscode/.claude"

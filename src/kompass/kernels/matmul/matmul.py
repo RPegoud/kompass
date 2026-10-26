@@ -69,23 +69,26 @@ def matmul_tiled_fwd(
     for k_offset in range(0, K, BLOCK_SIZE_K):
         x = x_desc.load([m_offset, k_offset])
         y = y_desc.load([k_offset, n_offset])
-        z_acc += tl.dot(x, y, input_precision=input_precision)
+        z_acc = tl.dot(x, y, acc=z_acc, input_precision=input_precision)
 
     z_desc.store([m_offset, n_offset], z_acc)
 
 
 def matmul_triton_tiled(
-    X: torch.Tensor, Y: torch.Tensor, input_precision: Literal["ieee", "tf32"] = "ieee"
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    BLOCK_SIZE_M: int = 128,
+    BLOCK_SIZE_N: int = 128,
+    BLOCK_SIZE_K: int = 64,
+    num_stages: int = 3,
+    num_warps: int = 8,
+    input_precision: Literal["ieee", "tf32"] = "ieee",
 ) -> torch.Tensor:
     _check_matmul_inputs(X, Y)
     M, K = X.shape
     _, N = Y.shape
 
     Z = torch.empty((M, N), device="cuda", dtype=X.dtype)
-
-    BLOCK_SIZE_M = 16  # TODO: tune
-    BLOCK_SIZE_N = 32
-    BLOCK_SIZE_K = 64
 
     NUM_BLOCKS_M = triton.cdiv(M, BLOCK_SIZE_M)
     NUM_BLOCKS_N = triton.cdiv(N, BLOCK_SIZE_N)
@@ -107,6 +110,8 @@ def matmul_triton_tiled(
         BLOCK_SIZE_N=BLOCK_SIZE_N,  # type: ignore
         BLOCK_SIZE_K=BLOCK_SIZE_K,  # type: ignore
         input_precision=input_precision,  # type: ignore
+        num_stages=num_stages,  # type: ignore
+        num_warps=num_warps,  # type: ignore
     )
 
     return Z
@@ -152,7 +157,7 @@ def matmul_tiled_l2_swizzle_fwd(
     GROUP_SIZE_M: tl.constexpr,
     input_precision: tl.constexpr,
 ):
-    pid_m, pid_n = get_swizzled_ordering(M, N, BLOCK_SIZE_M, BLOCK_SIZE_N, GROUP_SIZE_M)
+    pid_m, pid_n = get_swizzled_ordering(M, N, BLOCK_SIZE_M, BLOCK_SIZE_N, GROUP_SIZE_M)  # type: ignore
 
     x_desc = tl.make_tensor_descriptor(
         base=X_ptr,
@@ -180,13 +185,21 @@ def matmul_tiled_l2_swizzle_fwd(
     for k_offset in range(0, K, BLOCK_SIZE_K):
         x = x_desc.load([m_offset, k_offset])
         y = y_desc.load([k_offset, n_offset])
-        z_acc += tl.dot(x, y, input_precision=input_precision)
+        z_acc = tl.dot(x, y, acc=z_acc, input_precision=input_precision)
 
     z_desc.store([m_offset, n_offset], z_acc)
 
 
 def matmul_triton_tiled_l2_swizzle(
-    X: torch.Tensor, Y: torch.Tensor, input_precision: Literal["ieee", "tf32"] = "ieee"
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    BLOCK_SIZE_M: int = 128,
+    BLOCK_SIZE_N: int = 128,
+    BLOCK_SIZE_K: int = 64,
+    GROUP_SIZE_M: int = 8,
+    num_stages: int = 3,
+    num_warps: int = 8,
+    input_precision: Literal["ieee", "tf32"] = "ieee",
 ) -> torch.Tensor:
     _check_matmul_inputs(X, Y)
     M, K = X.shape
@@ -197,11 +210,6 @@ def matmul_triton_tiled_l2_swizzle(
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
-
-    BLOCK_SIZE_M = 16  # TODO: tune
-    BLOCK_SIZE_N = 32
-    BLOCK_SIZE_K = 64
-    GROUP_SIZE_M = 8
 
     matmul_tiled_l2_swizzle_fwd[grid](
         X_ptr=X,
@@ -221,6 +229,8 @@ def matmul_triton_tiled_l2_swizzle(
         BLOCK_SIZE_N=BLOCK_SIZE_N,  # type: ignore
         GROUP_SIZE_M=GROUP_SIZE_M,  # type: ignore
         input_precision=input_precision,  # type: ignore
+        num_stages=3,  # type: ignore
+        num_warps=8,  # type: ignore
     )
 
     return Z
