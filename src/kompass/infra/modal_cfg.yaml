@@ -4,3 +4,4 @@ kernel_remote_path: "/kernels"
 cuda_kernel_cache_path: "/cache/cuda"
 triton_kernel_cache_path: "/cache/triton"
 max_containers: 10 # free plan limit
+timeout: 3600 # one hour

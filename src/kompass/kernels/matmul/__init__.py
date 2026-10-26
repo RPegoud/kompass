@@ -94,7 +94,7 @@ def prune_matmul_config(
     dtype: torch.dtype,
     limits: dict[str, int],
 ) -> tuple[bool, str | None]:
-    from triton import cdiv, next_power_of_2
+    from triton import next_power_of_2
 
     t = tuning
     smem = (
@@ -106,18 +106,14 @@ def prune_matmul_config(
     if smem > 0.9 * limits["shared_memory_per_block_optin"]:
         return True, f"needs ~{smem // 1024}KB of shared memory"
 
-    if "GROUP_SIZE_M" in params and t["GROUP_SIZE_M"] >= cdiv(
-        params["M"], params["GROUP_SIZE_M"]
-    ):
-        return True, f"Duplicated config, {t["GROUP_SIZE_M"]=} > cdiv(M, BLOCK_SIZE_M)"
-
-    for param, p_value in params:
+    for param, p_value in tuning.items():
+        p_value = int(p_value)
         if "BLOCK_SIZE" in param:
             _, suffix = param.split("BLOCK_SIZE_", 2)
-            if p_value <= max(16, next_power_of_2(params[suffix])):
+            if p_value < 16 or p_value > next_power_of_2(params[suffix]):
                 return (
                     True,
-                    f"`tl.dot` requires BLOCK_SIZE_M >= 16 and BLOCK_SIZE shouldn't exceed `next_power_of_two(X)`Ì, got {p_value}",
+                    f"`tl.dot` requires BLOCK_SIZE_M >= 16 and BLOCK_SIZE shouldn't exceed `next_power_of_two(X)`, got {p_value}",
                 )
 
     return False, None
@@ -154,8 +150,8 @@ matmul_triton_tiled_l2_swizzle = MatmulSpec(
         supports_backward=False,
     ),
     option_names=("input_precision",),
-    search_space=tiled_matmul_search_space,
-    prun=prune_matmul_config,
+    search_space=tiled_matmul_search_space | {"GROUP_SIZE_M": [2, 4, 6]},
+    prune=prune_matmul_config,
 )
 
 REGISTRY: dict[str, OpEntry] = {

@@ -14,7 +14,7 @@ from __future__ import annotations
 import io
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -151,12 +151,25 @@ SURFACE = "#FEFEFE"
 GRID = "#EAEAEA"
 TEXT = "#000000"
 MUTED = "#020202A2"  # reference lines / roofline / baseline: never a palette hue
-PALETTE = ["#780116", "#f7b538", "#db7c26", "#d8572a", "#c32f27"]
+PALETTE = [
+    "#636EFA",
+    "#EF553B",
+    "#00CC96",
+    "#AB63FA",
+    "#FFA15A",
+    "#19D3F3",
+    "#FF6692",
+    "#B6E880",
+    "#FF97FF",
+    "#FECB52",
+]
 
 
 SYMBOLS = ["circle", "square", "diamond", "triangle", "hexagon", "pentagon", "star"]
 
 WIDTH, HEIGHT = 1000, 520
+
+TUNED = " (tuned)"  # suffix of an impl run with its `kompass tune` config
 
 
 def load_records(
@@ -181,6 +194,7 @@ def load_records(
         raise FileNotFoundError(f"no records found under {logs_dir}")
 
     df = pd.DataFrame(rows)
+    df = df[df["kind"] == "bench"]  # `tune` trials share the logs and cfg_name
     if cfg_name is not None:
         df = df[df["cfg_name"] == cfg_name]
     if run_id is not None:
@@ -308,6 +322,7 @@ def _chrome() -> list[Any]:
 class Style:
     color: str
     symbol: str
+    dashed: bool = False
 
     @property
     def size(self) -> float:
@@ -315,13 +330,18 @@ class Style:
 
 
 def impl_styles(df: pd.DataFrame, baseline: str) -> dict[str, Style]:
-    impls = [i for i in sorted(df["impl"].unique()) if i != baseline]
-    styles = {
-        impl: Style(PALETTE[i % len(PALETTE)], SYMBOLS[i % len(SYMBOLS)])
-        for i, impl in enumerate(impls)
+    """One color/symbol per impl; a tuned twin shares its impl's, drawn dashed."""
+    impls = df["impl"].unique()
+    bases = sorted({i.removesuffix(TUNED) for i in impls} - {baseline})
+    base_styles = {
+        b: Style(PALETTE[k % len(PALETTE)], SYMBOLS[k % len(SYMBOLS)])
+        for k, b in enumerate(bases)
     }
-    styles[baseline] = Style(MUTED, "circle")
-    return styles
+    base_styles[baseline] = Style(MUTED, "circle")
+    return {
+        i: replace(base_styles[i.removesuffix(TUNED)], dashed=i.endswith(TUNED))
+        for i in impls
+    }
 
 
 def resolve_baseline(df: pd.DataFrame, baseline: str | None) -> str:
@@ -447,7 +467,10 @@ def _series(
         if fill in hollow
     ]
     if lines:
-        marks.insert(0, xy.line(x, y, name=name, color=style.color, width=2.5))
+        dash = (6, 4) if style.dashed else None
+        marks.insert(
+            0, xy.line(x, y, name=name, color=style.color, width=2.5, dash=dash)
+        )
     return marks
 
 
@@ -710,6 +733,9 @@ def _sweep_section(
     op: str, cfg: str, df: pd.DataFrame, baseline: str | None
 ) -> tuple[list[tuple[str, Any]], pd.DataFrame, str]:
     """Plots, results table and markdown for one sweep (one op, one config)."""
+    if "tuning" in df:  # tuned twins (`bench --tuning both`) are their own series
+        tuned = df["tuning"].map(lambda t: isinstance(t, dict) and bool(t))
+        df = df.assign(impl=df["impl"].where(~tuned, df["impl"] + TUNED))
     failed = df[df["status"] != "ok"]
     df = add_derived(df)
     baseline = resolve_baseline(df, baseline)
@@ -722,6 +748,13 @@ def _sweep_section(
     df["pct_of_baseline"] = (
         100 * df[metric.column] / [base.get(k) for k in zip(*(df[c] for c in keys))]
     )  # type: ignore
+    is_tuned = df["impl"].str.endswith(TUNED)
+    if is_tuned.any():  # what tuning gained, against the same impl untuned
+        own = df.set_index(["impl", *keys])[metric.column]
+        twins = zip(df["impl"].str.removesuffix(TUNED), *(df[c] for c in keys))
+        df["pct_of_untuned"] = (
+            100 * df[metric.column] / [own.get(k) for k in twins]
+        ).where(is_tuned)  # type: ignore
 
     figs: list[tuple[str, Any]] = []
     for dtype, sub in df.groupby("dtype"):
@@ -814,6 +847,7 @@ def _sweep_section(
             "pct_of_ceiling",
             "bound",
             "pct_of_baseline",
+            *(["pct_of_untuned"] if "pct_of_untuned" in df else []),
             "max_abs_diff",
         ]
     ].rename(columns={"t_ms": f"{center}_ms"})
@@ -832,7 +866,9 @@ def _sweep_section(
         f"times: {center}" + (f" (spread {whiskers})" if whiskers else "") + "  \n"
         f"cases: {len(df) + len(failed)} ({len(failed)} not ok)\n\n"
         "### Results\n\n"
-        + table.to_markdown(index=False, floatfmt=".4g")
+        + table.astype(object)
+        .where(table.notna(), None)
+        .to_markdown(index=False, floatfmt=".4g", missingval="")
         + "\n\n### Plots\n\n"
         + "\n\n".join(f"![{name}](plots/{name}.png)" for name, _ in figs)
     )

@@ -4,6 +4,35 @@ from typing import Any, Literal
 
 
 @dataclass()
+class Case:
+    """A single benchmark unit: one {impl, params, dtype, options} combination
+    of an op, with the seed and timing quantiles to use. Built from a
+    `SweepConfig`."""
+
+    op: str
+    impl: str
+    params: dict[str, int]
+    dtype: str
+    seed: int
+    quantiles: tuple[float, ...]
+    tuning: dict[str, int] = field(default_factory=dict)  # tuning parameters
+    options: dict[str, str] = field(default_factory=dict)  # kernel kwargs
+
+
+@dataclass()
+class Payload:
+    """Everything a runner needs to execute a sweep: its `Case`s and the target
+    device. Serializable, so it is sent as-is to the Modal backend."""
+
+    run_id: str
+    op: str
+    cases: list[Case]
+    device: str
+    # bench: run cases with their saved config, without, or both side by side
+    tuning_mode: Literal["tuned", "untuned", "both"] = "untuned"  # harness/tuning.py
+
+
+@dataclass()
 class Run:
     """One sweep of a `bench` invocation: the `Payload` to execute, plus the
     bookkeeping (config name, run id, timestamp, log dir) the CLI needs to
@@ -51,33 +80,6 @@ class SweepConfig:
             )
 
 
-@dataclass()
-class Case:
-    """A single benchmark unit: one {impl, params, dtype, options} combination
-    of an op, with the seed and timing quantiles to use. Built from a
-    `SweepConfig`."""
-
-    op: str
-    impl: str
-    params: dict[str, int]
-    dtype: str
-    seed: int
-    quantiles: tuple[float, ...]
-    tuning: dict[str, int] = field(default_factory=dict)  # tuning parameters
-    options: dict[str, str] = field(default_factory=dict)  # kernel kwargs
-
-
-@dataclass()
-class Payload:
-    """Everything a runner needs to execute a sweep: its `Case`s and the target
-    device. Serializable, so it is sent as-is to the Modal backend."""
-
-    run_id: str
-    op: str
-    cases: list[Case]
-    device: str
-
-
 @dataclass(frozen=True)
 class CaseResult:
     """The outcome of running one `Case`: status, timings, correctness diff,
@@ -103,7 +105,7 @@ class CaseResult:
     reserved_mem: int
     total_mem: int
     required_mem: int
-    tuning_parameters: dict[str, int] = None
+    tuning: dict[str, int] = field(default_factory=dict)  # see Case.tuning
     error: str | None = None
 
 

@@ -1,12 +1,17 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .loaders import Loader
 from .ops import CompareResult, Op
 
 if TYPE_CHECKING:
     import torch
+
+
+class TooSlow(Exception):
+    """A tuning config whose first call is already far slower than the best
+    config found so far, so timing it in full isn't worth it."""
 
 
 @dataclass(frozen=True)
@@ -24,9 +29,8 @@ class KernelSpec:
         op: Op,
         loader: Loader,
         option_names: tuple[str, ...] = (),
-        search_space: dict[str : list[int]] | None = None,
-        prune: Callable[dict[str, int], dict[str, int], dict[str, int], torch.dtype]
-        | None = None,
+        search_space: dict[str, list[int]] | None = None,
+        prune: Callable | None = None,
     ) -> None:
         self.op = op
         self.loader = loader
@@ -61,9 +65,9 @@ class KernelSpec:
         params: dict[str, int],
         dtype: torch.dtype,
         seed: int,
-        options: dict[str, str] | None = None,
+        kwargs: dict[str, Any] | None = None,
     ) -> TestResults:
-        pred = self.kernel(*tensors, **(options or {}))
+        pred = self.kernel(*tensors, **(kwargs or {}))
         ref = self.op.reference(*tensors, params=params)
         res: CompareResult = self.op.compare(pred, ref)
         return TestResults(
@@ -113,28 +117,43 @@ class KernelSpec:
         seed: int,
         quantiles: tuple[float, ...] = (0.2, 0.5, 0.8),
         options: dict[str, str] | None = None,
+        tuning: dict[str, int] | None = None,
         rep_ms: int = 100,
-        coarse_rep_ratio: float = 1.0,
+        abort_above_ms: float | None = None,
     ) -> tuple[tuple[float, ...], float]:
+        """Check correctness, then time with `do_bench`. With `abort_above_ms`,
+        one call is timed first and `TooSlow` is raised if it exceeds it."""
         tensors = self._make_inputs(
             params=params, dtype=dtype, device=device, seed=seed
         )
-        options = options or {}
+        kwargs = (options or {}) | (tuning or {})  # both reach the kernel as kwargs
 
         gate = self._check(
-            tensors=tensors, params=params, dtype=dtype, seed=seed, options=options
+            tensors=tensors, params=params, dtype=dtype, seed=seed, kwargs=kwargs
         )
         if not gate.correct:
             raise ValueError(
                 f"The kernel {self.name} did not pass the correctness test with params {params=}; {dtype=}: {gate.correct=}, {gate.max_abs_diff=}\nAborting benchmark..."
             )
 
+        if abort_above_ms is not None:  # the gate already compiled the kernel
+            import torch
+
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            self.kernel(*tensors, **kwargs)
+            end.record()
+            torch.cuda.synchronize()
+            if (ms := start.elapsed_time(end)) > abort_above_ms:
+                raise TooSlow(f"one call took {ms:.3g} ms > {abort_above_ms:.3g} ms")
+
         from triton.testing import do_bench
 
         times: tuple[float, ...] = do_bench(
-            fn=lambda: self.kernel(*tensors, **options),
+            fn=lambda: self.kernel(*tensors, **kwargs),
             quantiles=quantiles,
-            rep=int(rep_ms * coarse_rep_ratio),
+            rep=rep_ms,
         )  # type: ignore
 
         return times, gate.max_abs_diff

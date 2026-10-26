@@ -28,11 +28,7 @@ def describe_env() -> dict[str, str | int | None]:
 
     m = re.search(r"release (\d+\.\d+), V(\S+)", _sh("nvcc", "--version"))
     nvcc = m.group(2) if m else "unknown"
-    device_prop = torch.cuda.get_device_properties()
-    max_shared_memory_per_block_optin = getattr(
-        device_prop, "max_shared_memory_per_block_optin", None
-    )
-    regs_per_multiprocessor = getattr(device_prop, "regs_per_multiprocessor", None)
+    props = torch.cuda.get_device_properties(0)
 
     return {
         "nvidia_smi": _sh(
@@ -45,8 +41,9 @@ def describe_env() -> dict[str, str | int | None]:
         "device_count": torch.cuda.device_count(),
         "device_capability": ".".join(map(str, torch.cuda.get_device_capability(0))),
         "torch_cuda_version": torch.version.cuda,
-        "max_shared_memory_per_block_optin": max_shared_memory_per_block_optin,
-        "regs_per_multiprocessor": regs_per_multiprocessor,
+        # what one block may use once it opts in (Triton does): the tuning limit
+        "shared_memory_per_block_optin": props.shared_memory_per_block_optin,
+        "regs_per_multiprocessor": props.regs_per_multiprocessor,
     }
 
 
