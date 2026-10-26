@@ -69,7 +69,7 @@ def matmul_tiled_fwd(
     for k_offset in range(0, K, BLOCK_SIZE_K):
         x = x_desc.load([m_offset, k_offset])
         y = y_desc.load([k_offset, n_offset])
-        z_acc += tl.dot(x, y, input_precision=input_precision)
+        z_acc = tl.dot(x, y, acc=z_acc, input_precision=input_precision)
 
     z_desc.store([m_offset, n_offset], z_acc)
 
@@ -83,8 +83,8 @@ def matmul_triton_tiled(
 
     Z = torch.empty((M, N), device="cuda", dtype=X.dtype)
 
-    BLOCK_SIZE_M = 16  # TODO: tune
-    BLOCK_SIZE_N = 32
+    BLOCK_SIZE_M = 128
+    BLOCK_SIZE_N = 128
     BLOCK_SIZE_K = 64
 
     NUM_BLOCKS_M = triton.cdiv(M, BLOCK_SIZE_M)
@@ -107,6 +107,8 @@ def matmul_triton_tiled(
         BLOCK_SIZE_N=BLOCK_SIZE_N,  # type: ignore
         BLOCK_SIZE_K=BLOCK_SIZE_K,  # type: ignore
         input_precision=input_precision,  # type: ignore
+        num_stages=3,
+        num_warps=8,
     )
 
     return Z
@@ -180,7 +182,7 @@ def matmul_tiled_l2_swizzle_fwd(
     for k_offset in range(0, K, BLOCK_SIZE_K):
         x = x_desc.load([m_offset, k_offset])
         y = y_desc.load([k_offset, n_offset])
-        z_acc += tl.dot(x, y, input_precision=input_precision)
+        z_acc = tl.dot(x, y, acc=z_acc, input_precision=input_precision)
 
     z_desc.store([m_offset, n_offset], z_acc)
 
@@ -198,8 +200,8 @@ def matmul_triton_tiled_l2_swizzle(
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
 
-    BLOCK_SIZE_M = 16  # TODO: tune
-    BLOCK_SIZE_N = 32
+    BLOCK_SIZE_M = 128
+    BLOCK_SIZE_N = 128
     BLOCK_SIZE_K = 64
     GROUP_SIZE_M = 8
 
@@ -221,6 +223,8 @@ def matmul_triton_tiled_l2_swizzle(
         BLOCK_SIZE_N=BLOCK_SIZE_N,  # type: ignore
         GROUP_SIZE_M=GROUP_SIZE_M,  # type: ignore
         input_precision=input_precision,  # type: ignore
+        num_stages=3,
+        num_warps=8,
     )
 
     return Z

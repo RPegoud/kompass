@@ -48,6 +48,18 @@
                 "--backend",
                 "modal:t4"
             ]
+        },
+        {
+            "name": "Tune",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "src.kompass.cli.main",
+            "args": [
+                "tune",
+                "matmul_square",
+                "--backend",
+                "modal:t4"
+            ]
         }
     ]
 }

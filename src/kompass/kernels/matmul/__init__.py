@@ -88,7 +88,49 @@ def matmul(
         flags.fp32_precision = prev
 
 
+def prune_matmul_config(
+    params: dict[str, int],
+    tuning: dict[str, int],
+    dtype: torch.dtype,
+    limits: dict[str, int],
+) -> tuple[bool, str | None]:
+    from triton import cdiv, next_power_of_2
+
+    t = tuning
+    smem = (
+        t["num_stages"]
+        * (t["BLOCK_SIZE_M"] + t["BLOCK_SIZE_N"])
+        * t["BLOCK_SIZE_K"]
+        * dtype.itemsize
+    )
+    if smem > 0.9 * limits["shared_memory_per_block_optin"]:
+        return True, f"needs ~{smem // 1024}KB of shared memory"
+
+    if "GROUP_SIZE_M" in params and t["GROUP_SIZE_M"] >= cdiv(
+        params["M"], params["GROUP_SIZE_M"]
+    ):
+        return True, f"Duplicated config, {t["GROUP_SIZE_M"]=} > cdiv(M, BLOCK_SIZE_M)"
+
+    for param, p_value in params:
+        if "BLOCK_SIZE" in param:
+            _, suffix = param.split("BLOCK_SIZE_", 2)
+            if p_value <= max(16, next_power_of_2(params[suffix])):
+                return (
+                    True,
+                    f"`tl.dot` requires BLOCK_SIZE_M >= 16 and BLOCK_SIZE shouldn't exceed `next_power_of_two(X)`Ì, got {p_value}",
+                )
+
+    return False, None
+
+
 MatmulSpec = partial(KernelSpec, op=Matmul())
+tiled_matmul_search_space = {
+    "BLOCK_SIZE_M": [64, 128, 256],
+    "BLOCK_SIZE_N": [64, 128, 256],
+    "BLOCK_SIZE_K": [32, 64, 128],
+    "num_warps": [4, 8],
+    "num_stages": [2, 3, 4],
+}
 
 matmul_torch = MatmulSpec(
     loader=TorchLoader(fn=matmul), option_names=("input_precision",)
@@ -101,7 +143,10 @@ matmul_triton_tiled = MatmulSpec(
         supports_backward=False,
     ),
     option_names=("input_precision",),
+    search_space=tiled_matmul_search_space,
+    prune=prune_matmul_config,
 )
+
 matmul_triton_tiled_l2_swizzle = MatmulSpec(
     loader=TritonLoader(
         module_path=f"{__package__}.matmul",
@@ -109,6 +154,8 @@ matmul_triton_tiled_l2_swizzle = MatmulSpec(
         supports_backward=False,
     ),
     option_names=("input_precision",),
+    search_space=tiled_matmul_search_space,
+    prun=prune_matmul_config,
 )
 
 REGISTRY: dict[str, OpEntry] = {

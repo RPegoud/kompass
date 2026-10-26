@@ -22,7 +22,7 @@ class BenchResult:
     as dicts), run-level metadata, and the device/software environment. The
     CLI flattens it into `meta.json` and `times.jsonl`."""
 
-    times: list[dict[str, Any]]
+    case_results: list[dict[str, Any]]
     meta: dict[str, Any]
     env: dict[str, str | int | None]
 
@@ -63,6 +63,7 @@ class Case:
     dtype: str
     seed: int
     quantiles: tuple[float, ...]
+    tuning: dict[str, int] = field(default_factory=dict)  # tuning parameters
     options: dict[str, str] = field(default_factory=dict)  # kernel kwargs
 
 
@@ -102,6 +103,7 @@ class CaseResult:
     reserved_mem: int
     total_mem: int
     required_mem: int
+    tuning_parameters: dict[str, int] = None
     error: str | None = None
 
 

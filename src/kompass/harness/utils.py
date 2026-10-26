@@ -28,6 +28,11 @@ def describe_env() -> dict[str, str | int | None]:
 
     m = re.search(r"release (\d+\.\d+), V(\S+)", _sh("nvcc", "--version"))
     nvcc = m.group(2) if m else "unknown"
+    device_prop = torch.cuda.get_device_properties()
+    max_shared_memory_per_block_optin = getattr(
+        device_prop, "max_shared_memory_per_block_optin", None
+    )
+    regs_per_multiprocessor = getattr(device_prop, "regs_per_multiprocessor", None)
 
     return {
         "nvidia_smi": _sh(
@@ -40,6 +45,8 @@ def describe_env() -> dict[str, str | int | None]:
         "device_count": torch.cuda.device_count(),
         "device_capability": ".".join(map(str, torch.cuda.get_device_capability(0))),
         "torch_cuda_version": torch.version.cuda,
+        "max_shared_memory_per_block_optin": max_shared_memory_per_block_optin,
+        "regs_per_multiprocessor": regs_per_multiprocessor,
     }
 
 
@@ -67,6 +74,7 @@ def resolve_impl(name: str) -> tuple[Op, KernelSpec]:
 
 def resolve_dtype(dtype: torch.dtype | str) -> torch.dtype:
     import torch
+
     if not isinstance(dtype, torch.dtype):
         dtype = getattr(torch, dtype)
         assert isinstance(dtype, torch.dtype), (

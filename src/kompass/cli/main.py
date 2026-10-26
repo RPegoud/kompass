@@ -201,7 +201,6 @@ def bench(
     ({impl, shape, dtype} tuples)."""
     import json
     from collections import Counter
-    from functools import partial
 
     from rich.progress import (
         BarColumn,
@@ -213,28 +212,10 @@ def bench(
     )
 
     from ..harness.utils import git_commit
+    from ..runner import select_runner
 
     runs = [_build_run(config_name, device) for config_name in config_names]
-
-    if backend == "local":
-        from ..runner import run_local
-
-        runner = run_local
-
-    elif backend.startswith("modal:"):
-        *_, gpu = backend.partition(":")
-        gpu = gpu.upper()
-        if gpu == "H100":
-            gpu += "!"  # `!` prevents automatic upgrades to H200
-
-        from ..infra.modal_runner import run_modal
-
-        runner = partial(run_modal, gpu=gpu)
-
-    else:
-        raise typer.BadParameter(
-            f"Expected backend format `modal:gpu`, e.g. `modal:h100`, got {backend}"
-        )
+    runner = select_runner(backend)
 
     with Progress(
         SpinnerColumn(),
@@ -242,7 +223,6 @@ def bench(
         BarColumn(bar_width=30, style="dim", complete_style="green"),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
-        # transient=True,
     ) as progress:
         tasks = {
             run.run_id: progress.add_task(
@@ -301,6 +281,139 @@ def bench(
         typer.echo(f"{n_failed}/{len(runs)} sweeps failed.", err=True)
         raise typer.Exit(1)
     typer.echo("Run complete!")
+
+
+@app.command()
+def tune(
+    config_names: Annotated[
+        list[str],
+        typer.Argument(
+            help="The configuration name(s), as defined in `src/kompass/cases/*.yaml`, e.g. `vec_add_sweep matmul_k_sweep`."
+        ),
+    ],
+    backend: Annotated[
+        str, typer.Option(help="Either `local` or `modal:gpu`, e.g. `modal:h100`")
+    ] = "local",
+    device: str = "cuda:0",
+) -> None:
+    import json
+    from collections import Counter, defaultdict
+    from dataclasses import replace
+    from itertools import product
+
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
+    from ..harness.schema import BenchResult, Case, Payload
+    from ..harness.utils import git_commit, resolve_dtype
+    from ..kernels import REGISTRY
+    from ..runner import select_runner
+
+    # 1. build the sweep: `build_runs` + expand with the hparams grid
+    # group cases by impl/math/dtype so that one compile handles every case in a group
+    runs = [_build_run(config_name, device) for config_name in config_names]
+    groups: list[tuple[Run, Payload]] = []
+    for run in runs:
+        cases: list[Case] = run.payload.cases
+        by_group: dict[str, list[Case]] = defaultdict(list)
+        for case in cases:
+            spec = REGISTRY[case.op].impls[case.impl]
+            search_space = spec.search_space
+
+            if search_space is None:  # ignore impls with no search space
+                continue
+
+            m = spec.math(resolve_dtype(case.dtype), case.options)
+            for param_set in product(*search_space.values()):
+                by_group[(case.impl, m, case.dtype)].append(
+                    replace(
+                        case,
+                        tuning={
+                            name: value
+                            for (name, value) in zip(search_space, param_set)
+                        },
+                    )
+                )
+        groups += [(run, replace(run.payload, cases=cs)) for cs in by_group.values()]
+
+    runner = select_runner(backend, kind="tune")
+
+    # 2. coarse run over the whole tuning grid
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}", style="dim"),
+        BarColumn(bar_width=30, style="dim", complete_style="green"),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+    ) as progress:
+        tasks = {
+            run.run_id: progress.add_task(
+                f"{run.config_name} ({run.run_id})", total=len(run.payload.cases)
+            )
+            for run in runs
+        }
+        results: list[BenchResult | BaseException] = runner(
+            [payload for (_, payload) in groups],
+            on_case_done=lambda run_id: progress.advance(tasks[run_id]),
+        )
+
+    # TODO: group runs by math, params, impl and filter top 5 tunings
+
+    git = git_commit()
+    n_failed = 0
+    for run, _, result in zip(groups, results):
+        if isinstance(result, BaseException):
+            meta: dict[str, Any] = {"error": repr(result)}
+            times: list[dict[str, Any]] = []
+            summary = f"failed: {meta['error']}"
+            n_failed += 1
+        else:
+            meta, times = result.meta, result.times
+            summary = dict(Counter(r["status"] for r in times))
+            for row in times:  # flatten params dict to "param_{name}"
+                params = row.pop("params")
+                for p_name, p_value in params.items():
+                    row[f"param_{p_name}"] = p_value
+                row |= result.env
+                row |= {
+                    "cfg_name": run.config_name,
+                    "run_id": run.run_id,
+                    "kind": "tune",
+                    "git_commit": git,
+                    "measured_copy_bandwidth_gbps_triton": meta[
+                        "measured_copy_bandwidth_gbps_triton"
+                    ],
+                }
+
+        meta |= {
+            "cfg_name": run.config_name,
+            "run_id": run.run_id,
+            "timestamp": run.timestamp,
+            "kind": "bench",
+            "git_commit": git,
+        }
+
+        run.output_dir.mkdir(parents=True, exist_ok=True)
+        with open(run.output_dir / "meta.json", "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+        with open(run.output_dir / "times.jsonl", "w", encoding="utf-8") as f:
+            f.writelines(json.dumps(row) + "\n" for row in times)
+
+        typer.echo(f"{run.config_name} ({run.run_id}): {summary}")
+
+    if n_failed:
+        typer.echo(f"{n_failed}/{len(runs)} sweeps failed.", err=True)
+        raise typer.Exit(1)
+    typer.echo("Run complete!")
+
+    # TODO: Persist configs to /tuning
+    # TODO: Print a table of configs and best parameters
 
 
 @app.command()
