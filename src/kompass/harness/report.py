@@ -577,11 +577,26 @@ def plot_pct(
     return _line_chart(marks, x_axis, y_axis, title)
 
 
+def _shipped(df: pd.DataFrame) -> pd.DataFrame:
+    """Each impl as you would ship it: its tuned twin where one ran for the
+    same dtype, math and size, otherwise the default."""
+    tuned = df["impl"].str.endswith(TUNED)
+
+    def keys(d: pd.DataFrame) -> list[tuple]:
+        base = d["impl"].str.removesuffix(TUNED)
+        return list(zip(base, d["dtype"], d["math"], d["size_label"]))
+
+    has_twin = {*keys(df[tuned])}  # type: ignore
+    superseded = [not t and k in has_twin for t, k in zip(tuned, keys(df))]
+    return df[~pd.Series(superseded, index=df.index)]  # type: ignore
+
+
 def plot_roofline(
     sub: pd.DataFrame, scope: pd.DataFrame, styles: dict[str, Style], title: str
 ):
     """Classic roofline: one roof per arithmetic run, impls as points. Axes
-    span `scope`."""
+    span `scope`. Impls are nudged apart by a few % of intensity so that
+    points at one size don't hide each other."""
     lo = scope["arithmetic_intensity"].min() * 0.5
     hi = scope["arithmetic_intensity"].max() * 2
     xs = [lo * (hi / lo) ** (i / 200) for i in range(201)]
@@ -591,9 +606,11 @@ def plot_roofline(
     for m, peak in sub.groupby("math")["peak_tflops"].first().items():
         ys = [min(peak, bw * x / 1e3) for x in xs]  # GB/s * FLOP/B / 1e3 = TFLOPS
         marks.append(xy.line(xs, ys, name=f"roofline ({m})", color=MUTED, width=2))
+    impls = sorted(scope["impl"].unique())  # scope: same nudge in every panel
     for impl, g in sub.groupby("impl"):
+        nudge = 1.03 ** (impls.index(impl) - (len(impls) - 1) / 2)
         marks += _series(
-            g["arithmetic_intensity"],
+            g["arithmetic_intensity"] * nudge,
             g["tflops"],
             str(impl),
             styles[str(impl)],
@@ -624,7 +641,7 @@ def plot_roofline(
         _log_axis(
             xy.x_axis,
             [lo, hi],
-            "algorithmic arithmetic intensity (FLOP / ideal byte)",
+            "algorithmic arithmetic intensity (FLOP / ideal byte), impls nudged ±3%",
         ),
         _log_axis(xy.y_axis, [*scope["tflops"], *scope["peak_tflops"]], "TFLOPS"),
         xy.legend(loc="lower right"),
@@ -793,7 +810,7 @@ def _sweep_section(
             (
                 f"{cfg}_roofline_{short}",
                 _by_math(
-                    sub,
+                    _shipped(sub),
                     f"{head} Roofline — {short}",
                     lambda rows, scope, title: plot_roofline(
                         rows, scope, styles, title
@@ -810,6 +827,21 @@ def _sweep_section(
                         f"{head} % of {baseline} {metric.unit} — {short}",
                         lambda rows, scope, title: plot_pct(
                             rows, scope, "pct_of_baseline", baseline, title, styles
+                        ),
+                    ),
+                )
+            )
+        if "pct_of_untuned" in sub and sub["pct_of_untuned"].notna().any():  # type: ignore
+            figs.append(
+                (
+                    f"{cfg}_tuning_gain_{short}",
+                    _by_math(
+                        sub[sub["pct_of_untuned"].notna()],  # type: ignore
+                        f"{head} Tuning gain: % of untuned {metric.unit} — {short}",
+                        # own y per panel: gains differ by orders of magnitude
+                        # across maths (fp32 defaults spill registers, tf32's don't)
+                        lambda rows, _scope, title: plot_pct(
+                            rows, rows, "pct_of_untuned", "untuned", title, styles
                         ),
                     ),
                 )

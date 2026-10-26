@@ -69,7 +69,11 @@ def softmax_triton_online_fwd(
 
 
 def _softmax_triton(
-    X: torch.Tensor, kernel_fn: triton.JITFunction, BLOCK_SIZE: int
+    X: torch.Tensor,
+    kernel_fn: triton.JITFunction,
+    BLOCK_SIZE: int,
+    num_stages: int = 3,
+    num_warps: int = 8,
 ) -> torch.Tensor:
     _check_softmax_inputs(X)
     rows, cols = X.shape
@@ -83,26 +87,36 @@ def _softmax_triton(
         Y_row_stride=Y.stride(0),
         n_cols=cols,
         BLOCK_SIZE=BLOCK_SIZE,
+        num_stages=num_stages,
+        num_warps=num_warps,
     )
 
     return Y
 
 
-def softmax_triton_single_block(X: torch.Tensor) -> torch.Tensor:
+def softmax_triton_single_block(
+    X: torch.Tensor, num_stages: int = 3, num_warps: int = 8
+) -> torch.Tensor:
     BLOCK_SIZE = triton.next_power_of_2(X.shape[1])
     return _softmax_triton(
         X=X,
         kernel_fn=softmax_triton_single_block_fwd,
         BLOCK_SIZE=int(BLOCK_SIZE),
+        num_stages=num_stages,
+        num_warps=num_warps,
     )
 
 
 def softmax_triton_online(
     X: torch.Tensor,
-) -> torch.Tensor:  # TODO: add BLOCK_SIZE option
-    BLOCK_SIZE = 1024
+    BLOCK_SIZE: int = 1024,
+    num_stages: int = 3,
+    num_warps: int = 8,
+) -> torch.Tensor:
     return _softmax_triton(
         X=X,
         kernel_fn=softmax_triton_online_fwd,
         BLOCK_SIZE=int(BLOCK_SIZE),
+        num_stages=num_stages,
+        num_warps=num_warps,
     )

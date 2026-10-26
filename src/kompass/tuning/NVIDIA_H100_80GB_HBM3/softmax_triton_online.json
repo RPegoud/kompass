@@ -1,0 +1,562 @@
+[
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 1024
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 4,
+      "BLOCK_SIZE": 1024
+    },
+    "median_ms": 0.011839999817311764,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 128
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 3,
+      "BLOCK_SIZE": 128
+    },
+    "median_ms": 0.008383999578654766,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 131072
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 4,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 1.093727946281433,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 16384
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 2,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 0.10543999820947647,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 2048
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 2,
+      "BLOCK_SIZE": 2048
+    },
+    "median_ms": 0.017823999747633934,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 256
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 2,
+      "BLOCK_SIZE": 256
+    },
+    "median_ms": 0.00886400043964386,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 262144
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 3,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 2.208672046661377,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 32768
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 2,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 0.26528000831604004,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 3,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.02921600081026554,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 512
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 3,
+      "BLOCK_SIZE": 512
+    },
+    "median_ms": 0.00979200005531311,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 65536
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 2,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 0.5438880026340485,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "bfloat16",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 8192
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 3,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 0.05161599814891815,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 1,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 3,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.0063680000603199005,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 1024,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 4,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.01664000004529953,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 128,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 3,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.0077760000713169575,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 16,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 3,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.006752000190317631,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 16384,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 4,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.1838880032300949,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 2,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 4,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.006175999995321035,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 256,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 3,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.008576000109314919,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 32,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 2,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.0066559999249875546,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 4,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.006144000217318535,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 1024
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 2,
+      "BLOCK_SIZE": 1024
+    },
+    "median_ms": 0.017343999817967415,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 128
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 3,
+      "BLOCK_SIZE": 128
+    },
+    "median_ms": 0.008352000266313553,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 131072
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 3,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 2.19267201423645,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 16384
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 4,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 0.2470400035381317,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 2048
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 4,
+      "BLOCK_SIZE": 2048
+    },
+    "median_ms": 0.029184000566601753,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 256
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 3,
+      "BLOCK_SIZE": 256
+    },
+    "median_ms": 0.00940799992531538,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 262144
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 3,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 4.397023916244507,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 32768
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 3,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 0.5405759811401367,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 3,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.050912000238895416,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 512
+    },
+    "tuning": {
+      "num_warps": 4,
+      "num_stages": 2,
+      "BLOCK_SIZE": 512
+    },
+    "median_ms": 0.011231999844312668,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 65536
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 3,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 1.0927040576934814,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 4096,
+      "N": 8192
+    },
+    "tuning": {
+      "num_warps": 16,
+      "num_stages": 3,
+      "BLOCK_SIZE": 8192
+    },
+    "median_ms": 0.09750399738550186,
+    "run_id": "0d2c7655",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 64,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 2,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.007519999984651804,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  },
+  {
+    "dtype": "float32",
+    "options": {},
+    "params": {
+      "M": 8,
+      "N": 4096
+    },
+    "tuning": {
+      "num_warps": 8,
+      "num_stages": 4,
+      "BLOCK_SIZE": 4096
+    },
+    "median_ms": 0.006463999859988689,
+    "run_id": "35194f4f",
+    "git_commit": "5fb288d291dd09e5d24a3ac5bb8ae09ff2b348df-dirty"
+  }
+]
