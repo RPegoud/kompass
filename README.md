@@ -1,5 +1,9 @@
 # `Kompass`
 
+[![CI](https://github.com/RPegoud/kompass/actions/workflows/ci.yml/badge.svg)](https://github.com/RPegoud/kompass/actions/workflows/ci.yml)
+[![Apache 2.0 License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB.svg?logo=python&logoColor=white)](https://python.org)
+
 <a href="Kompass.png?raw=true"><img src="Kompass.png?raw=true" width="200" align="right" /></a>
 
 **Kompass is a tooling suite for GPU kernel development.** It gives you one harness to
@@ -24,6 +28,39 @@ Kompass:
 
 ---
 
+## 📊 Results on an H100
+
+Two Triton matmul kernels, a tiled one and the same with an L2-cache swizzle, against torch (cuBLAS).
+Each was tuned with `kompass tune`, then benchmarked with its default and tuned configs side by side
+(`kompass bench --tuning both`) on a Modal H100 (SXM, 80GB HBM3). Throughput uses the median time of
+`triton.testing.do_bench`.
+
+| 4096³ | torch | Triton tiled, default config | Triton tiled, tuned | Tuned vs torch |
+| --- | ---: | ---: | ---: | ---: |
+| bfloat16 | 728 TFLOPS | 549 TFLOPS | 693 TFLOPS | 95% |
+| tf32 | 372 TFLOPS | 81 TFLOPS | 153 TFLOPS | 41% |
+| float32 (IEEE) | 52 TFLOPS | 0.7 TFLOPS | 30.7 TFLOPS | 59% |
+
+- **Tuning** speeds the kernel up by 26% in bf16 and 89% in tf32. In IEEE fp32, which runs on CUDA cores rather than
+  tensor cores, the default 128×128×64 tiles with 8 warps run out of registers: the tuned config is 44× faster.
+- **The L2-cache swizzle doesn't pay off here.** Over 36 tuned shapes, the swizzled kernel reaches 94% of the plain
+  tiled kernel's throughput on average. At these sizes, the working set fits in the H100's 50 MB L2, and the plain
+  kernel's 2D launch already walks down M, so neighbouring blocks share tiles of the right-hand matrix.
+- **tf32 has the most room left**: 41% of cuBLAS. Persistent kernels, warp specialization and TMA are the next steps.
+
+The bfloat16 square sweep, as `kompass report` draws it:
+
+<p>
+  <img src="docs/images/matmul_square_throughput_bfloat16.png" width="49%" />
+  <img src="docs/images/matmul_square_pct_baseline_bfloat16.png" width="49%" />
+</p>
+<p>
+  <img src="docs/images/matmul_square_tuning_gain_bfloat16.png" width="49%" />
+  <img src="docs/images/matmul_square_roofline_bfloat16.png" width="49%" />
+</p>
+
+---
+
 ## ⌨️ CLI endpoints
 
 After `uv sync`, all endpoints are available through the `kompass` entry point.
@@ -32,8 +69,8 @@ After `uv sync`, all endpoints are available through the `kompass` entry point.
 | --- | --- |
 | `kompass list` | Prints every registered Op and its implementations. |
 | `kompass runs [--op <op>] [--config <config_name>] [--n 20]` | Lists the most recent runs in `logs/`. |
-| `kompass bench <config_name> [<config_name> ...] [--backend local\|modal:<gpu>] [--device cuda:0] [--tuning tuned\|untuned\|both]` | Runs one or more sweeps: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. Sweeps run one after another locally, and in parallel on Modal (one GPU each). A failed sweep doesn't stop the others; `bench` exits with code 1 if any failed. `--tuning` (default `tuned`) uses the configs saved by `tune` for the GPU it runs on; `both` also runs each tuned case with the launcher defaults, in the same run. |
-| `kompass tune <config_name> [<config_name> ...] [--backend local\|modal:<gpu>]` | Searches each tunable impl's `search_space` on the sweep's cases (see [Make it tunable](#-6-make-it-tunable)) and saves the fastest config per case to `src/kompass/tuning/<gpu>/<impl>.json`. Each config is timed briefly, then the 5 fastest per case are re-timed in full on the same GPU. On Modal, every (impl, precision, shape) group is its own input, spread over up to `max_containers` GPUs, costliest first. |
+| `kompass bench <config_name> [<config_name> ...] [--backend local\|modal:<gpu>] [--device cuda:0] [--tuning tuned\|untuned\|both]` | Runs one or more sweeps: each `impl × dtype × parameter set` in the YAML (from an `axes` grid or an explicit `shapes` list, see [Describe a sweep](docs/adding-a-kernel.md#-4-describe-a-sweep)) is checked for correctness, then timed with `triton.testing.do_bench`. Sweeps run one after another locally, and in parallel on Modal (one GPU each). A failed sweep doesn't stop the others; `bench` exits with code 1 if any failed. `--tuning` (default `tuned`) uses the configs saved by `tune` for the GPU it runs on; `both` also runs each tuned case with the launcher defaults, in the same run. |
+| `kompass tune <config_name> [<config_name> ...] [--backend local\|modal:<gpu>]` | Searches each tunable impl's `search_space` on the sweep's cases (see [Make it tunable](docs/adding-a-kernel.md#-6-make-it-tunable)) and saves the fastest config per case to `src/kompass/tuning/<gpu>/<impl>.json`. Each config is timed briefly, then the 5 fastest per case are re-timed in full on the same GPU. On Modal, every (impl, precision, shape) group is its own input, spread over up to `max_containers` GPUs, costliest first. |
 | `kompass profile <op>/<impl> -p K=V [-p K=V ...] [-o K=V ...] [--dtype float32] [--set full\|roofline\|detailed]` | Profiles one case under `ncu`, then ingests the report automatically. `-o` sets kernel options, e.g. `-o input_precision=tf32`. |
 | `kompass ingest <reports/.../report.ncu-rep>` | Parses an existing Nsight Compute report into `records.jsonl` (`profile` calls this for you). |
 | `kompass report [--config <config_name>] [--run-id <id>] [--gpu <name>] [--baseline <impl>]` | Builds `reports/<config_name>/`: `summary.md` (results table + embedded plots), `summary.csv`, `plots/*.png`, and every plot in one multi-page `report.pdf`. Uses the newest `bench` run of each sweep, one section per sweep (op + config), so sweeps of the same op never share an axis; each baseline defaults to the op's `torch` impl. Arithmetics that share a dtype (e.g. `float32` and `tf32`) get side-by-side panels, and tuned runs appear as `<impl> (tuned)` with a tuning-gain plot. |
@@ -69,89 +106,12 @@ kompass profile vec_add/triton -p N=16777216 --dtype float32 --set full
 > `bench` takes the **full** impl names in the YAML (`vec_add_triton`). `profile` takes
 > `op/suffix` (`vec_add/triton`) and joins the two parts with `_`.
 
-### 📂 Outputs
-
-```
-logs/<timestamp>__<op>__<run_id>/   # bench
-├── meta.json        # run config, GPU/driver/nvcc info, measured copy bandwidth, git commit (or `error` if the sweep failed)
-└── times.jsonl      # one row per case (times at each quantile, flops, bytes, status, memory, tuning used)
-
-logs/<timestamp>__<op>__<run_id>/   # tune (kind: "tune", ignored by `report`)
-├── meta.json        # pruned configs with their reason, failed groups
-└── times.jsonl      # one row per trial, with its `tuning` and `stage` (1: short pass, 2: re-timed finalists)
-
-src/kompass/tuning/<gpu>/<impl>.json   # tune: best config per (dtype, options, shape), read by bench
-
-logs/<timestamp>__<op>__<uid>/      # profile (ingest)
-├── meta.json
-└── records.jsonl    # one row per kernel launch (duration, DRAM bytes, %DRAM / %SM of peak)
-
-reports/<op>_<impl>/<uid>/          # profile
-├── meta.json
-└── report.ncu-rep   # open in Nsight Compute UI
-
-reports/<config_name>/              # report
-├── summary.md       # per-sweep results table + embedded plots
-├── summary.csv
-├── plots/*.png
-└── report.pdf       # every plot, one per page
-```
-
-Every row is flat: params appear as `param_<name>` columns. That makes loading a run a
-one-liner, e.g. `pd.read_json("logs/.../times.jsonl", lines=True)`.
-
----
-
-## 🌳 File tree
-
-```
-.
-├── Dockerfile                  # CUDA 13 + Nsight Compute + uv toolchain (devcontainer, pods, Modal)
-├── docker/
-│   ├── start.sh                # pod entrypoint: sshd, repo clone + uv sync, ncu preflight
-│   └── ncu-check.sh            # checks that ncu can read GPU perf counters
-├── .devcontainer/              # VS Code devcontainer (bind-mounts repo, caches uv/ccache/torch ext)
-├── example.env                 # template for .env (Modal credentials)
-├── pyproject.toml / uv.lock
-├── logs/                       # bench / profile records (generated)
-├── reports/                    # ncu reports (generated)
-└── src/kompass/
-    ├── cli/main.py             # Typer app: list, runs, bench, tune, profile, ingest, report
-    ├── runner.py               # run_bench(), run_tune() (two-pass search with early abort), run_local()
-    ├── infra/
-    │   ├── modal_cfg.yaml      # volumes, max_containers, timeout
-    │   └── modal_runner.py     # Modal app/image/volumes; run_modal() dispatches payloads in parallel, with progress
-    ├── harness/
-    │   ├── ops.py              # Op ABC: reference, compare, make_inputs, bytes_moved, flops
-    │   ├── loaders.py          # TorchLoader, TritonLoader, CudaLoader (JIT, per-arch cache)
-    │   ├── spec.py             # KernelSpec = Op + Loader; test() and bench()
-    │   ├── registry.py         # OpEntry(op, impls)
-    │   ├── schema.py           # plain dataclasses: SweepConfig, Case, Payload, CaseResult, ProfileRecord
-    │   ├── tuning.py           # save / load / apply the configs found by `tune`
-    │   ├── report.py           # records -> plots, tables, PDF; vendor peaks per GPU
-    │   ├── profile.py          # child process launched under ncu (warmup + profiled call)
-    │   └── utils.py            # env description, impl/dtype resolution, git commit, ...
-    ├── tuning/<gpu>/<impl>.json # best configs found by `tune` (commit them)
-    ├── cases/                  # sweep definitions (*.yaml)
-    │   ├── vec_add_sweep.yaml
-    │   ├── softmax_occupancy.yaml
-    │   ├── softmax_rowlen.yaml
-    │   ├── matmul_k_sweep.yaml
-    │   └── matmul_square.yaml
-    └── kernels/
-        ├── __init__.py         # global REGISTRY (merges every Op's registry)
-        ├── common.cuh          # CUDA_CHECK / CUDA_CHECK_LAUNCH macros
-        ├── <op_name>/
-            └── <op_name>.cu    # define CUDA kernels here
-            └── <op_name>.py    # define Triton kernels here
-```
-
 ---
 
 ## 🛠️ Setup
 
 **Requirements:** an NVIDIA GPU with driver ≥ 580 (CUDA 13.x) for local runs, or a
-[Modal](https://modal.com) account for remote runs. Python 3.14 and [uv](https://docs.astral.sh/uv/).
+[Modal](https://modal.com) account for remote runs. Python ≥ 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ### 🐳 Option A: devcontainer (recommended)
 
@@ -203,293 +163,29 @@ configs are keyed on the device name the container reports, never on the request
 
 ## 🧩 Adding a kernel
 
-Every Op lives in its own package under `src/kompass/kernels/<op>/`. The walkthrough below
-uses `vec_add`. The same steps apply to any new Op.
+Every Op lives in its own package under `src/kompass/kernels/<op>/`. To add one:
 
-```
-src/kompass/kernels/vec_add/
-├── __init__.py   # Op definition + KernelSpecs + REGISTRY
-├── vec_add.py    # Triton kernel + Python launcher
-└── vecAdd.cu     # CUDA kernel + pybind11 binding
-```
+1. **Define the Op**: how to build inputs, a reference result, a correctness check, and FLOP/byte counts.
+2. **Write the kernels** in Triton (a Python launcher) or CUDA (a `.cu` file bound with pybind11).
+3. **Register them** as `KernelSpec`s in the Op's `REGISTRY`.
+4. **Describe a sweep** in `src/kompass/cases/<name>.yaml`: impls, dtypes, shapes, options.
+5. **Make them tunable** (optional): give each kernel a `search_space` and a `prune` hook for `kompass tune`.
 
-### 📐 1. Define the Op
-
-The Op is the contract that every implementation is tested and measured against:
-
-```python
-# kernels/vec_add/__init__.py
-class VecAdd(Op):
-    param_names: tuple[str, ...] = ("N",)   # keys used in the sweep YAML's `axes` / `shapes`
-
-    @staticmethod
-    def reference(*tensors, params=None) -> torch.Tensor:
-        A, B = tensors
-        return torch.add(A, B)
-
-    def compare(self, pred, ref) -> TestResult:
-        return TestResult(
-            correct=torch.equal(pred, ref),          # use torch.testing.assert_close for reductions
-            max_abs_diff=torch.max(torch.abs(ref - pred)).item(),
-        )
-
-    @staticmethod
-    def make_inputs(params, dtype, requires_grad, seed, device):
-        gen = torch.Generator(device).manual_seed(seed)
-        A = torch.randn(params["N"], generator=gen, dtype=dtype, device=device, requires_grad=requires_grad)
-        B = torch.randn(params["N"], generator=gen, dtype=dtype, device=device, requires_grad=requires_grad)
-        return A, B
-
-    @staticmethod
-    def bytes_moved(params, dtype) -> int:   # minimum DRAM traffic: read A, B, write C
-        return 3 * params["N"] * dtype.itemsize
-
-    @staticmethod
-    def flops(params) -> int:
-        return params["N"]
-```
-
-`bytes_moved` and `flops` give the arithmetic intensity used in the roofline report.
-`bytes_moved` is also used to skip cases that wouldn't fit in GPU memory.
-
-### 🔱 2a. Write a Triton kernel
-
-A Triton impl is a plain Python function that takes the tensors returned by `make_inputs`
-and returns the output:
-
-```python
-# kernels/vec_add/vec_add.py
-@triton.jit
-def vec_add_fwd_kernel(X_ptr, Y_ptr, Z_ptr, n_cols, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)
-    offs = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
-    mask = offs < n_cols
-    X = tl.load(X_ptr + offs, mask=mask, other=0.0)
-    Y = tl.load(Y_ptr + offs, mask=mask, other=0.0)
-    tl.store(Z_ptr + offs, X + Y, mask=mask)
-
-
-def vec_add_triton(A: torch.Tensor, B: torch.Tensor) -> torch.Tensor:
-    C = torch.empty_like(A)
-    n = C.numel()
-    grid = lambda meta: (triton.cdiv(n, meta["BLOCK_SIZE"]),)
-    vec_add_fwd_kernel[grid](A, B, C, n, BLOCK_SIZE=256)
-    return C
-```
-
-### ⚡ 2b. Write a CUDA kernel
-
-A CUDA impl is a `.cu` file that exposes a function through pybind11. `CudaLoader` compiles it
-with `torch.utils.cpp_extension.load`, caches the build per GPU arch (`sm_XY`) and per source hash,
-and adds the `kernels/` directory to the include path so `../common.cuh` resolves.
-
-```cpp
-// kernels/vec_add/vecAdd.cu
-#include "../common.cuh"
-#include <c10/cuda/CUDAGuard.h>
-#include <torch/extension.h>
-
-__global__ void vecAddFwdKernel(float *A, float *B, float *C, int n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) C[i] = A[i] + B[i];
-}
-
-at::Tensor vec_add_fwd(const at::Tensor &A, const at::Tensor &B) {
-  TORCH_CHECK(A.is_cuda() && B.is_cuda(), "Inputs must be CUDA tensors");
-  TORCH_CHECK(A.scalar_type() == at::kFloat, "float32 only");
-  const at::cuda::CUDAGuard guard(A.device());
-
-  auto C = at::empty_like(A);
-  const int n = A.numel(), threads = 256;
-  vecAddFwdKernel<<<(n + threads - 1) / threads, threads>>>(
-      A.data_ptr<float>(), B.data_ptr<float>(), C.data_ptr<float>(), n);
-  CUDA_CHECK(cudaGetLastError());
-  return C;
-}
-
-// The name bound here must equal CudaLoader's `fn_name`
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) { m.def("vec_add_cuda", &vec_add_fwd); }
-```
-
-### 📝 3. Register the implementations
-
-Wrap each implementation in a `KernelSpec` (Op + Loader) and expose a `REGISTRY`:
-
-```python
-# kernels/vec_add/__init__.py
-VecAddSpec = partial(KernelSpec, op=VecAdd())
-
-vec_add_torch = VecAddSpec(loader=TorchLoader(fn=torch.add))
-
-vec_add_triton = VecAddSpec(
-    loader=TritonLoader(
-        module_path=f"{__package__}.vec_add",  # module that holds the launcher
-        fn_name="vec_add_triton",              # launcher function name
-    ),
-)
-
-vec_add_cuda = VecAddSpec(
-    loader=CudaLoader(
-        module_name="vec_add_cuda",            # extension name (arch + hash are appended)
-        fn_name="vec_add_cuda",                # name bound in PYBIND11_MODULE
-        sources=[str(Path(__file__).parent / "vecAdd.cu")],
-    ),
-)
-vec_add_torch = VecAddSpec(                    # torch reference
-    loader=TorchLoader(fn=torch.add),          # simply pass the raw function
-)
-REGISTRY: dict[str, OpEntry] = {
-    "vec_add": OpEntry(
-        op=VecAdd(),
-        impls={
-            "vec_add_torch": vec_add_torch,
-            "vec_add_triton": vec_add_triton,
-            "vec_add_cuda": vec_add_cuda,
-        },
-    )
-}
-```
-
-Name impls `<op>_<suffix>` so that `kompass profile <op>/<suffix>` can find them.
-
-If a launcher takes keyword arguments that a sweep should vary, register one impl and list them in
-`option_names` instead of registering one impl per value. Each name must also be in the Op's
-`option_names`:
-
-```python
-# kernels/matmul/__init__.py
-matmul_triton_tiled = MatmulSpec(
-    loader=TritonLoader(module_path=f"{__package__}.matmul", fn_name="matmul_triton_tiled"),
-    option_names=("input_precision",),         # matmul_triton_tiled(X, Y, input_precision="ieee")
-)
-```
-For a new Op, also merge its registry into the global one in
-[kernels/\_\_init\_\_.py](src/kompass/kernels/__init__.py):
-
-```python
-from .vec_add import REGISTRY as _vec_add
-from .my_op import REGISTRY as _my_op
-
-for r in [_vec_add, ..., _my_op]:
-    REGISTRY.update(r)
-```
-
-### 🧪 4. Describe a sweep
-
-A sweep YAML names the Op, the impls and dtypes to compare, and the parameter sets to run.
-Kompass runs every `impl × dtype × parameter set` combination. You define the parameter sets
-in one of two ways, and a config must use exactly one of them:
-
-- **`axes`** gives one list of values per parameter. Kompass runs the **Cartesian product** of the lists.
-  Use it for scans, e.g. sweeping `N` for `vec_add`, or sweeping `K` with `M` and `N` fixed for `matmul`.
-- **`shapes`** gives an **explicit list** of parameter combinations. Only those are run. Use it when
-  parameters move together (e.g. square matmuls), so the full grid would be mostly irrelevant cases.
-
-Every parameter set must define exactly the Op's `param_names`. Otherwise `bench` exits with an error.
-
-**`options`** (optional) sweeps kernel keyword arguments, e.g. `input_precision: [ieee, tf32]` for matmul.
-Keys must be in the Op's `option_names`. Each impl runs every combination of the options it declares
-in its `KernelSpec(option_names=...)`; impls that declare none run once. `matmul_torch` declares
-`input_precision` too, so each precision is compared against torch running the same arithmetic.
-Combinations that don't change the arithmetic on a dtype run once: `tf32` only affects float32
-inputs, so bf16 runs each matmul kernel once. The report puts each arithmetic (`float32`, `tf32`, ...)
-in its own panel, side by side on the same page.
-
-```yaml
-# src/kompass/cases/softmax_occupancy.yaml (grid via `axes`)
-op: softmax
-impls: [softmax_triton_online, softmax_torch]
-axes:  # one list per entry in Op.param_names
-  M: [1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 4096, 16384] 
-  N: [4096]
-dtypes: [float32]
-seed: 0
-quantiles: [0.2, 0.5, 0.8] # passed to do_bench
-```
-
-```yaml
-# src/kompass/cases/matmul_square.yaml (explicit combinations via `shapes`)
-op: matmul
-impls: [matmul_triton_tiled, matmul_torch]
-options:
-  input_precision: [ieee, tf32] # float32 only: bf16 runs once per impl
-shapes:
-  - { M: 1024, N: 1024, K: 1024 }
-  - { M: 4096, N: 4096, K: 4096 }
-  - { M: 8192, N: 8192, K: 8192 }
-dtypes: [float32, bfloat16]
-seed: 0
-quantiles: [0.2, 0.5, 0.8]
-```
-
-With `axes: {M: [1024, 4096], N: [1024, 4096], K: [1024, 4096]}` you would get 8 shapes.
-The `shapes` list above runs only the 3 square ones.
-
-### 🚀 5. Run it
-
-```bash
-kompass list                                              # the new impls should be listed
-kompass bench vec_add_sweep                               # correctness-gated benchmark
-kompass profile vec_add/cuda -p N=16777216                # Nsight Compute deep dive
-```
-
-### 🔧 6. Make it tunable
-
-To let `tune` search a kernel's launch parameters:
-
-1. Have the launcher take them as keyword arguments, with the defaults `bench` uses when no tuned
-   config exists.
-2. Give its `KernelSpec` a `search_space` (one list of values per keyword) and, optionally, a `prune`
-   hook that rejects configs before they're compiled.
-
-```python
-# kernels/matmul/matmul.py
-def matmul_triton_tiled(X, Y, BLOCK_SIZE_M=128, BLOCK_SIZE_N=128, BLOCK_SIZE_K=64,
-                        num_stages=3, num_warps=8, input_precision="ieee"): ...
-
-# kernels/matmul/__init__.py
-def prune_matmul_config(params, tuning, dtype, limits) -> tuple[bool, str | None]:
-    """(skip, reason). `limits` is the worker's describe_env(), e.g. its shared memory."""
-    t = tuning
-    smem = t["num_stages"] * (t["BLOCK_SIZE_M"] + t["BLOCK_SIZE_N"]) * t["BLOCK_SIZE_K"] * dtype.itemsize
-    if smem > 0.9 * limits["shared_memory_per_block_optin"]:
-        return True, f"needs ~{smem // 1024}KB of shared memory"
-    return False, None
-
-matmul_triton_tiled = MatmulSpec(
-    loader=TritonLoader(module_path=f"{__package__}.matmul", fn_name="matmul_triton_tiled"),
-    option_names=("input_precision",),
-    search_space={
-        "BLOCK_SIZE_M": [64, 128, 256], "BLOCK_SIZE_N": [64, 128, 256], "BLOCK_SIZE_K": [32, 64, 128],
-        "num_warps": [4, 8], "num_stages": [2, 3, 4],
-    },
-    prune=prune_matmul_config,
-)
-```
-
-`tune` runs the sweep's cases once per config in the grid:
-
-- **Pass 1** times every config briefly. A config whose first call is already more than 3× slower than
-  the best one found so far (and over 1 ms) is recorded as `slow` and not timed in full.
-- **Pass 2** re-times the 5 fastest configs per case, on the same GPU.
-- **Failures don't stop the run:** configs that exceed the GPU's shared memory get status `oom_smem`,
-  and wrong results get `incorrect`; both are recorded like any other case.
-
-Tuned configs are specific to a GPU and a shape, and `bench` only uses a config saved for the exact
-same dtype, options and shape. Commit the files in `src/kompass/tuning/` to share them: the Modal image
-ships them with the code.
+The [step-by-step guide](docs/adding-a-kernel.md) walks through `vec_add` and `matmul`, and documents the
+log, tuning and report outputs.
 
 ---
 
-## 💬 Tips
+## 🧑‍💻 Development
 
-- **Correctness first.** A failing `compare` marks the case `incorrect` and skips timing.
-  Check the `error` field in `times.jsonl` for the max abs diff.
-- **Compilation cache.** CUDA builds are keyed on `sm_XY` plus a hash of the sources, so editing a
-  `.cu` file triggers a rebuild. The devcontainer keeps `ccache` and `torch_extensions` on volumes,
-  and Modal keeps them on the `cuda_kernels` and `triton_kernels` volumes.
-- **Autograd.** Set `supports_backward=True` on a loader to have `make_inputs` create tensors
-  with `requires_grad=True`.
+```bash
+uv sync                      # includes the dev tools: pytest, ruff, pyright
+uv run pytest                # CPU-only: GPU calls are replaced by fakes with predictable timings
+uv run ruff check src tests && uv run ruff format --check src tests
+uv run pyright
+```
+
+CI runs the same checks on Python 3.12 and 3.14 for every pull request.
 
 ## 🗺️ Roadmap
 

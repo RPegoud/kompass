@@ -194,13 +194,13 @@ def load_records(
         raise FileNotFoundError(f"no records found under {logs_dir}")
 
     df = pd.DataFrame(rows)
-    df = df[df["kind"] == "bench"]  # `tune` trials share the logs and cfg_name
+    df = df.loc[df["kind"] == "bench"]  # `tune` trials share the logs and cfg_name
     if cfg_name is not None:
-        df = df[df["cfg_name"] == cfg_name]
+        df = df.loc[df["cfg_name"] == cfg_name]
     if run_id is not None:
-        df = df[df["run_id"] == run_id]
+        df = df.loc[df["run_id"] == run_id]
     if gpu is not None:
-        df = df[df["device_name"] == gpu]
+        df = df.loc[df["device_name"] == gpu]
     if df.empty:
         raise ValueError("no records left after filtering")
 
@@ -215,7 +215,7 @@ def load_records(
         newest = df.groupby("cfg_name")["run_id"].transform(
             lambda s: s.iloc[-1]  # rows arrive in file order == chronological
         )
-        df = df[df["run_id"] == newest]
+        df = df.loc[df["run_id"] == newest]
 
     return df.reset_index(drop=True)
 
@@ -251,7 +251,7 @@ def _peak(gpu: str, math: str) -> float:
 
 def add_derived(df: pd.DataFrame) -> pd.DataFrame:
     """Throughputs, sizes and the per-case ceiling, for the ok rows of one op."""
-    df = df[df["status"] == "ok"].copy()
+    df = df.loc[df["status"] == "ok"].copy()
     df = df.join(
         pd.DataFrame(
             [_time_stats(t, q) for t, q in zip(df["times"], df["quantiles"])],
@@ -280,7 +280,7 @@ def add_derived(df: pd.DataFrame) -> pd.DataFrame:
     # Params of *this* op only: frames built from several logs carry other
     # ops' param columns (e.g. matmul's K next to softmax), all NaN here.
     all_params = [c for c in df.columns if c.startswith("param_")]
-    params = [c for c in all_params if df[c].notna().all()]
+    params = [c for c in all_params if bool(df[c].notna().all())]
     df = df.drop(columns=[c for c in all_params if c not in params])
     df["size_label"] = df[params].apply(
         lambda r: "x".join(map(str, map(int, r))), axis=1
@@ -358,7 +358,9 @@ def resolve_baseline(df: pd.DataFrame, baseline: str | None) -> str:
 
 def _varying_params(sub: pd.DataFrame) -> tuple[list[str], list[str]]:
     """(varying, fixed) `param_*` columns of `sub`; all of them vary if none do."""
-    params = [c for c in sub.columns if c.startswith("param_") and sub[c].notna().any()]
+    params = [
+        c for c in sub.columns if c.startswith("param_") and bool(sub[c].notna().any())
+    ]
     varying = [c for c in params if sub[c].nunique() > 1] or params
     return varying, [c for c in params if c not in varying]
 
@@ -377,7 +379,10 @@ def _size_axis(sub: pd.DataFrame) -> tuple[dict[str, int], Any]:
         ["problem_size", "size_label"]
     )
     pos = {label: i for i, label in enumerate(sizes["size_label"])}
-    ticks = ["x".join(str(int(r[c])) for c in varying) for _, r in sizes.iterrows()]
+    ticks = [
+        "x".join(str(int(v)) for v in row)
+        for row in sizes[varying].itertuples(index=False)
+    ]
 
     label = "x".join(c.removeprefix("param_") for c in varying)
     if fixed:
@@ -504,7 +509,7 @@ def plot_throughput(
 
     for impl, g in sub.groupby("impl"):
         g = g.sort_values("problem_size")
-        x = g["size_label"].map(pos)
+        x = g["size_label"].map(pos.get)
         if whiskers:  # throughput ~ 1/time
             hi, lo = (
                 g[col] * g["t_ms"] / g["t_lo_ms"],
@@ -566,7 +571,7 @@ def plot_pct(
         g = g.sort_values("problem_size")
         hollow = g["bound"] == "memory" if hollow_memory_bound else None
         marks += _series(
-            g["size_label"].map(pos),
+            g["size_label"].map(pos.get),
             g[column],
             str(impl),
             styles[str(impl)],
@@ -753,7 +758,7 @@ def _sweep_section(
     if "tuning" in df:  # tuned twins (`bench --tuning both`) are their own series
         tuned = df["tuning"].map(lambda t: isinstance(t, dict) and bool(t))
         df = df.assign(impl=df["impl"].where(~tuned, df["impl"] + TUNED))
-    failed = df[df["status"] != "ok"]
+    failed = df.loc[df["status"] != "ok"]
     df = add_derived(df)
     baseline = resolve_baseline(df, baseline)
     metric = Metric.for_op(df)
@@ -761,7 +766,7 @@ def _sweep_section(
 
     # Compare like with like: the baseline running the same arithmetic.
     keys = ["dtype", "math", "size_label"]
-    base = df[df["impl"] == baseline].set_index(keys)[metric.column]
+    base = df.loc[df["impl"] == baseline].set_index(keys)[metric.column]
     df["pct_of_baseline"] = (
         100 * df[metric.column] / [base.get(k) for k in zip(*(df[c] for c in keys))]
     )  # type: ignore
@@ -865,33 +870,40 @@ def _sweep_section(
     )
 
     center, whiskers = quantile_desc(df)
-    table = df.sort_values(
-        ["dtype", "math", "problem_size", "pct_of_ceiling"],
-        ascending=[True, True, True, False],
-    )[
-        [
-            "impl",
-            "dtype",
-            "math",
-            "size_label",
-            "t_ms",
-            metric.column,
-            "pct_of_ceiling",
-            "bound",
-            "pct_of_baseline",
-            *(["pct_of_untuned"] if "pct_of_untuned" in df else []),
-            "max_abs_diff",
+    table = (
+        df.sort_values(
+            ["dtype", "math", "problem_size", "pct_of_ceiling"],
+            ascending=[True, True, True, False],
+        )
+        .loc[
+            :,
+            [
+                "impl",
+                "dtype",
+                "math",
+                "size_label",
+                "t_ms",
+                metric.column,
+                "pct_of_ceiling",
+                "bound",
+                "pct_of_baseline",
+                *(["pct_of_untuned"] if "pct_of_untuned" in df else []),
+                "max_abs_diff",
+            ],
         ]
-    ].rename(columns={"t_ms": f"{center}_ms"})
+        .rename(columns={"t_ms": f"{center}_ms"})
+    )
     table["dtype"] = table["dtype"].str.removeprefix("torch.")
 
     runs = ", ".join(
         f"{r} ({c})" for r, c in df[["run_id", "cfg_name"]].drop_duplicates().values
     )
+    # None outside a git checkout; pandas keeps it missing through astype(str)
+    commits = sorted(df["git_commit"].dropna().astype(str).unique())
     md = (
         f"## {op} / {cfg}\n\n"
         f"runs: {runs}  \n"
-        f"git: {', '.join(sorted(df['git_commit'].astype(str).unique()))}  \n"
+        f"git: {', '.join(commits) or 'unknown'}  \n"
         f"baseline: {baseline}  \n"
         f"throughput: {metric.unit} "
         f"({(df['bound'] == 'memory').mean():.0%} of cases memory-bound)  \n"
