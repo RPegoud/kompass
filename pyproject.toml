@@ -7,6 +7,8 @@ authors = [
     { name = "Ryan Pégoud", email = "ryan.pegoud@outlook.com" }
 ]
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE.txt"]
 dependencies = [
     "hydra-core>=1.3.5",
     "ipykernel>=7.3.0",
